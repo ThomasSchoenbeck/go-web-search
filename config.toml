@@ -1,0 +1,78 @@
+# Every value here is optional; anything omitted falls back to the built-in
+# default. CLI flags override this file, but only when actually passed.
+
+[database]
+# Turso supports multi-process access, so CLI and server can share these files.
+# Set true to refuse a second process instead.
+exclusive_lock = false
+# database/sql connection cap. 1 serialises writes (conservative while the
+# Turso bindings are beta). Raise it to use Turso's concurrency.
+max_open_conns = 1
+# Driver name the Turso package registers with database/sql. Configurable
+# because the Go bindings have moved packages recently.
+driver = "turso"
+data_dir = "./data"
+main_db = "harvester.db"
+log_db = "harvester-logs.db"
+
+[browser]
+headless = false
+user_data_dir = "./chrome-user-data"
+profile = "Tom"
+fix_ua = true
+no_sandbox = false
+start_url = "https://www.google.com/"
+
+[search]
+terms_file = "terms.txt"
+engines = ["google", "bing", "duckduckgo"]
+# Engines that type into the search box instead of loading a results URL.
+typed = ["google", "bing", "duckduckgo"]
+min_delay = "4s"
+max_delay = "11s"
+query_timeout = "90s"
+artifact_dir = "runs"
+engine_stagger = "1500ms"
+engine_jitter = "1200ms"
+
+# Result counts only apply to engines NOT in `typed`, since a typed search lets
+# the engine build its own URL. 0 or absent means no count parameter is sent.
+[search.results]
+google = 0
+bing = 0
+duckduckgo = 0
+
+# Engines run concurrently per term, but staggered: engine N waits
+# stagger*N + rand(jitter) before starting. Simultaneous queries to all three
+# from one profile is the burst pattern that gets you challenged.
+# Set both to "0s" for true simultaneity.
+
+[scrape]
+enabled = true
+user_agent = "serp-harvester/0.1 (+local research tool)"
+# The product token matched against robots.txt groups.
+robots_user_agent = "serp-harvester"
+# Domains fetched in parallel. Within a domain, URLs are sequential.
+max_domains = 8
+per_domain_delay = "1s"
+respect_crawl_delay = true
+http_timeout = "20s"
+max_body_bytes = 5000000
+# Retry in the browser when a plain HTTP fetch yields almost no text.
+browser_fallback = true
+min_text_chars = 500
+# Concurrent fallback tabs. Each is a Chrome renderer, so this is a memory
+# ceiling, not a politeness one.
+max_browser_tabs = 3
+# Sync cap for API calls, so an LLM tool call cannot run past its timeout.
+max_urls = 25
+total_timeout = "120s"
+# Inline text returned by MCP tools; full documents stay behind get_scrape.
+snippet_chars = 2000
+
+[server]
+addr = "127.0.0.1:8080"
+read_timeout = "30s"
+write_timeout = "180s"
+# When set, required as `Authorization: Bearer <key>` on everything but /healthz.
+api_key = ""
