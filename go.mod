@@ -1,4 +1,4 @@
-module serp-harvester
+module go-web-search
 
 go 1.26
 

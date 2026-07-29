@@ -28,7 +28,7 @@ terms_file = "terms.txt"
 engines = ["google", "bing", "duckduckgo"]
 # Engines that type into the search box instead of loading a results URL.
 typed = ["google", "bing", "duckduckgo"]
-min_delay = "4s"
+min_delay = "2s"
 max_delay = "11s"
 query_timeout = "90s"
 artifact_dir = "runs"
@@ -49,9 +49,9 @@ duckduckgo = 0
 
 [scrape]
 enabled = true
-user_agent = "serp-harvester/0.1 (+local research tool)"
+user_agent = "go-web-search/0.1 (+local research tool)"
 # The product token matched against robots.txt groups.
-robots_user_agent = "serp-harvester"
+robots_user_agent = "go-web-search"
 # Domains fetched in parallel. Within a domain, URLs are sequential.
 max_domains = 8
 per_domain_delay = "1s"
@@ -71,7 +71,7 @@ total_timeout = "120s"
 snippet_chars = 2000
 
 [server]
-addr = "127.0.0.1:8080"
+addr = "0.0.0.0:8081"
 read_timeout = "30s"
 write_timeout = "180s"
 # When set, required as `Authorization: Bearer <key>` on everything but /healthz.

@@ -1,0 +1,54 @@
+# Taskfile.yaml
+version: '3'
+
+vars:
+  APP_NAME: go-web-search
+
+tasks:
+  build:
+    desc: "Build all three platforms: Windows, Linux x64, Linux ARM64"
+    cmds:
+      - task: build-windows
+      - task: build-linux-x64
+      - task: build-linux-arm64
+
+  build-windows:
+    desc: "Build Windows amd64 binary"
+    env:
+      GOOS: windows
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -ldflags="-s -w" -o dist/{{.APP_NAME}}-windows-amd64.exe .
+
+  build-linux-x64:
+    desc: "Build Linux x64 (amd64) binary"
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -ldflags="-s -w" -o dist/{{.APP_NAME}}-linux-amd64 .
+
+  build-linux-arm64:
+    desc: "Build Linux ARM64 binary"
+    env:
+      GOOS: linux
+      GOARCH: arm64
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -ldflags="-s -w" -o dist/{{.APP_NAME}}-linux-arm64 .
+
+  clean:
+    desc: "Clean build artifacts"
+    cmds:
+      - rm -rf dist/
+      - mkdir -p dist/
+
+  verify:
+    desc: "List all built binaries"
+    deps:
+      - build
+    cmds:
+      - echo "✅ Build complete! Binaries in dist/:"
+      - dir dist/

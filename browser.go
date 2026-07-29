@@ -322,29 +322,67 @@ func pause(min, max time.Duration) chromedp.Action {
 	})
 }
 
-// collectLinksJS returns every href inside the result containers. Selectors
-// only scope the search; the harvest itself is "all anchors in the results
-// area", which survives markup changes far better than per-result selectors.
+// collectLinksJS returns hrefs from search result blocks, skipping
+// navigation, footers, sidebars, and other non-result chrome inside the
+// result container. The resultRoots scope the search; within each root,
+// only anchors inside recognised result-element selectors are collected.
 func collectLinksJS(roots []string) string {
+	resultSelectors := []string{
+		"[role=listing] > li",          // Google organic results
+		"[role=listing] a[data-href]",   // Google result links with data-href
+		"div.g",                         // Google result cards
+		"ol.react-results--main > li",   // DuckDuckGo organic results
+		"article[data-result-type]",     // Bing organic results
+		"li.b_algo",                     // Bing result cards
+		"div.result",                    // generic
+		"div.search-result",             // generic
+		"div[data-result]",              // generic
+	}
 	return fmt.Sprintf(`(() => {
-  const selectors = %s;
-  const scopes = [];
-  for (const sel of selectors) {
-    document.querySelectorAll(sel).forEach((n) => scopes.push(n));
+  const rootSelectors = %s;
+  const resultSelectors = %s;
+  const rootScopes = [];
+  for (const sel of rootSelectors) {
+    document.querySelectorAll(sel).forEach((n) => rootScopes.push(n));
   }
-  const roots = scopes.length ? scopes : [document.body];
+  const roots = rootScopes.length ? rootScopes : [document.body];
   const seen = new Set();
   const out = [];
   for (const root of roots) {
-    for (const a of root.querySelectorAll('a[href]')) {
-      const href = a.href;
-      if (!href || seen.has(href)) continue;
-      seen.add(href);
-      out.push(href);
+    // Try to find result blocks inside the root
+    let resultBlocks = [];
+    for (const sel of resultSelectors) {
+      root.querySelectorAll(sel).forEach((n) => resultBlocks.push(n));
+    }
+    // If no result blocks found, fall back to all anchors (safety net)
+    if (resultBlocks.length === 0) {
+      for (const a of root.querySelectorAll('a[href]')) {
+        const href = a.href;
+        if (!href || seen.has(href)) continue;
+        skipIfNav(a);
+        seen.add(href);
+        out.push(href);
+      }
+      continue;
+    }
+    // Collect anchors from result blocks only
+    for (const block of resultBlocks) {
+      for (const a of block.querySelectorAll('a[href]')) {
+        const href = a.href || a.dataset?.href;
+        if (!href || seen.has(href)) continue;
+        seen.add(href);
+        out.push(href);
+      }
     }
   }
+  function skipIfNav(el) {
+    const nav = el.closest('nav, footer, aside');
+    if (nav) return;
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (role === 'navigation' || role === 'complementary') return;
+  }
   return out;
-})()`, jsArray(roots))
+})()`, jsArray(roots), jsArray(resultSelectors))
 }
 
 func jsArray(values []string) string {

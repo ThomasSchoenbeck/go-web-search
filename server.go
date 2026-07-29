@@ -37,7 +37,7 @@ type SearchResponse struct {
 
 type ScrapeRequest struct {
 	URLs  []string `json:"urls" jsonschema:"absolute URLs to fetch"`
-	RunID string   `json:"run_id,omitempty" jsonschema:"instead of urls, scrape everything a previous run found"`
+	RunID string   `json:"run_id,omitempty" jsonschema:"when passed with urls, links scrapes to the search that found them; when passed without urls, scrapes everything that run found (use only when full coverage is needed)"`
 }
 
 type ScrapeResponse struct {
@@ -81,11 +81,32 @@ func newAPIServer(cfg Config, h *harvester) *apiServer {
 
 	s.http = &http.Server{
 		Addr:         cfg.Server.Addr,
-		Handler:      s.withAuth(mux),
+		Handler:      corsMiddleware(s.withAuth(mux)),
 		ReadTimeout:  cfg.Server.ReadTimeout.Duration,
 		WriteTimeout: cfg.Server.WriteTimeout.Duration,
 	}
 	return s
+}
+
+// corsMiddleware adds Access-Control headers so browser-based MCP clients on
+// other ports can reach the server via the streamable HTTP transport.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers",
+				"Authorization, Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id")
+			w.Header().Set("Access-Control-Expose-Headers",
+				"Content-Type, MCP-Session-Id, Trailer")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *apiServer) ListenAndServe() error { return s.http.ListenAndServe() }
@@ -155,19 +176,36 @@ func (s *apiServer) runScrape(ctx context.Context, req ScrapeRequest) (*ScrapeRe
 	var (
 		outcomes []ScrapeOutcome
 		err      error
+		runID    string
 	)
 	switch {
-	case req.RunID != "":
+	case req.RunID != "" && len(req.URLs) == 0:
+		// Batch scrape: fetch every URL a previous run found.
 		outcomes, err = s.h.ScrapeRun(ctx, req.RunID)
-		if err != nil {
-			return nil, err
-		}
+		runID = req.RunID
 	case len(req.URLs) > 0:
-		outcomes = s.h.ScrapeURLs(ctx, "", req.URLs)
+		// Selective scrape: fetch only the given URLs.
+		if req.RunID != "" {
+			// Associated with an existing search run for tracing.
+			outcomes = s.h.ScrapeURLs(ctx, req.RunID, req.URLs)
+			runID = req.RunID
+		} else {
+			// Direct scrape: no parent search, create its own run.
+			runID, err = s.h.store.StartRun(ctx, "api-scrape", "")
+			if err != nil {
+				return nil, err
+			}
+			defer s.h.store.FinishRun(ctx, runID)
+			outcomes = s.h.ScrapeURLs(ctx, runID, req.URLs)
+			runID = runID
+		}
 	default:
 		return nil, errors.New("provide either urls or run_id")
 	}
-	return &ScrapeResponse{RunID: req.RunID, Results: outcomes}, nil
+	if err != nil {
+		return nil, err
+	}
+	return &ScrapeResponse{RunID: runID, Results: outcomes}, nil
 }
 
 // snippetsFor loads capped text for each successful scrape, which is what makes
@@ -309,18 +347,23 @@ func (s *apiServer) handleGetScrape(w http.ResponseWriter, r *http.Request) {
 // ---- MCP tools ----
 
 func (s *apiServer) buildMCPServer() *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "serp-harvester", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "go-web-search", Version: "0.1.0"}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "web_search",
 		Description: "Search Google, Bing and DuckDuckGo for one or more terms and return the " +
-			"destination URLs found. Set scrape=true to also fetch the page contents. " +
-			"Returns a run_id; full details stay retrievable by id.",
+			"destination URLs found across all three engines. Set scrape=true to also fetch " +
+			"the page contents of every URL found. Returns a run_id for tracing; full details " +
+			"stay retrievable by id.",
 	}, s.mcpSearch)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "web_scrape",
-		Description: "Fetch and clean specific URLs, or every URL from a previous run_id. " +
+		Description: "Fetch and clean page contents. When selecting urls from a web_search result, " +
+			"pick broadly: aim for at least one URL per domain, skip obvious navigation links " +
+			"like /roster, /stats, /news, /videos, /about, and don't cluster on a single site. " +
+			"Pass the run_id from web_search to link scrapes back to that search for tracing. " +
+			"For direct scrapes (no prior search), just pass urls — a run is created automatically. " +
 			"Returns text snippets plus scrape ids for the full documents.",
 	}, s.mcpScrape)
 
@@ -331,7 +374,7 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_run",
-		Description: "Summarise a run by id: how many searches, URLs and scrapes it produced.",
+		Description: "Summarise a run by id: how many searches, urls and scrapes it produced.",
 	}, s.mcpGetRun)
 
 	return server

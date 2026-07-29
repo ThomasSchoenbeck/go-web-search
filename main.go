@@ -39,6 +39,7 @@ func realMain() error {
 	headless := flag.Bool("headless", false, "override browser.headless")
 	fixUA := flag.Bool("fix-ua", true, "override browser.fix_ua")
 	noSandbox := flag.Bool("no-sandbox", false, "override browser.no_sandbox")
+	serverPort := flag.String("port", "", "override server.addr port (e.g. 8080)")
 	minDelay := flag.Duration("min-delay", 0, "override search.min_delay")
 	maxDelay := flag.Duration("max-delay", 0, "override search.max_delay")
 	queryTimeout := flag.Duration("query-timeout", 0, "override search.query_timeout")
@@ -90,6 +91,12 @@ func realMain() error {
 			cfg.Browser.FixUA = *fixUA
 		case "no-sandbox":
 			cfg.Browser.NoSandbox = *noSandbox
+		case "port":
+			host := "0.0.0.0"
+			if strings.Contains(cfg.Server.Addr, ":") {
+				host = strings.Split(cfg.Server.Addr, ":")[0]
+			}
+			cfg.Server.Addr = host + ":" + *serverPort
 		case "min-delay":
 			cfg.Search.MinDelay = Duration{*minDelay}
 		case "max-delay":

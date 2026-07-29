@@ -308,8 +308,13 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]RunSummary, error) {
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, mode, started_at, COALESCE(finished_at, '') FROM runs
-		  ORDER BY started_at DESC LIMIT ?`, limit)
+		`SELECT r.id, r.mode, r.started_at, COALESCE(r.finished_at, ''),
+		        (SELECT COUNT(*) FROM searches WHERE run_id = r.id),
+		        (SELECT COUNT(DISTINCT su.url_id) FROM search_urls su
+		           JOIN searches se ON se.id = su.search_id WHERE se.run_id = r.id),
+		        (SELECT COUNT(*) FROM scrapes WHERE run_id = r.id)
+		  FROM runs r
+		  ORDER BY r.started_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +323,8 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]RunSummary, error) {
 	var out []RunSummary
 	for rows.Next() {
 		var r RunSummary
-		if err := rows.Scan(&r.ID, &r.Mode, &r.StartedAt, &r.FinishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Mode, &r.StartedAt, &r.FinishedAt,
+			&r.Searches, &r.URLs, &r.Scrapes); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

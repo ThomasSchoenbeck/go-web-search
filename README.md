@@ -1,4 +1,4 @@
-# serp-harvester (prototype)
+# go-web-search (prototype)
 
 Local Go tool that drives a real Chrome instance through `chromedp` to run a list
 of search terms against Google, Bing and DuckDuckGo, and writes the destination

@@ -109,8 +109,8 @@ func defaultConfig() Config {
 		Database: DatabaseConfig{
 			Driver:       "turso",
 			DataDir:      "./data",
-			MainDB:       "harvester.db",
-			LogDB:        "harvester-logs.db",
+			MainDB:       "go-web-search.db",
+			LogDB:        "go-web-search-logs.db",
 			MaxOpenConns: 1,
 		},
 		Browser: BrowserConfig{
@@ -134,8 +134,8 @@ func defaultConfig() Config {
 		},
 		Scrape: ScrapeConfig{
 			Enabled:           true,
-			UserAgent:         "serp-harvester/0.1 (+local research tool)",
-			RobotsUserAgent:   "serp-harvester",
+			UserAgent:         "go-web-search/0.1 (+local research tool)",
+			RobotsUserAgent:   "go-web-search",
 			MaxDomains:        8,
 			PerDomainDelay:    Duration{1 * time.Second},
 			RespectCrawlDelay: true,
@@ -149,7 +149,7 @@ func defaultConfig() Config {
 			SnippetChars:      2000,
 		},
 		Server: ServerConfig{
-			Addr:         "127.0.0.1:8080",
+			Addr:         "0.0.0.0:8081",
 			ReadTimeout:  Duration{30 * time.Second},
 			WriteTimeout: Duration{180 * time.Second},
 		},
