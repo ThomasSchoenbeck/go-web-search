@@ -31,7 +31,7 @@ func newHarvester(cfg Config, store *Store, logger *log.Logger, sess *session) *
 		store:   store,
 		log:     logger,
 		session: sess,
-		scraper: newScraper(cfg.Scrape, store, logger, sess),
+		scraper: newScraper(cfg.Scrape, cfg.Cache, store, logger, sess),
 	}
 }
 
@@ -187,10 +187,10 @@ func (h *harvester) ScrapeRun(ctx context.Context, runID string) ([]ScrapeOutcom
 	for _, r := range rows {
 		urls = append(urls, r.URL)
 	}
-	return h.scraper.Scrape(ctx, runID, urls), nil
+	return h.scraper.Scrape(ctx, runID, urls, true, 0), nil
 }
 
 // ScrapeURLs scrapes an explicit list.
 func (h *harvester) ScrapeURLs(ctx context.Context, runID string, urls []string) []ScrapeOutcome {
-	return h.scraper.Scrape(ctx, runID, urls)
+	return h.scraper.Scrape(ctx, runID, urls, true, 0)
 }

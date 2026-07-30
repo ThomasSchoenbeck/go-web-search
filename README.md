@@ -20,25 +20,52 @@ extract.go       redirect unwrapping, infrastructure filtering, dedupe
 runlog.go        run folder + console/file mirrored logger
 ```
 
-## The three modes
+## Modes
 
 **`-mode browse`** opens a real window on the persistent profile and hands it to
 you. Accept the consent dialogs, search a few things by hand, click into some
 results. Finish by closing the window or pressing Enter — Chrome only flushes
 cookies on a clean exit, and both paths are clean.
 
-**`-mode search`** runs the term list, optionally scraping afterwards with
-`-scrape`. It prints one thing on stdout: the run id. Everything else is
-retrievable by that id.
-
-**`-mode serve`** starts the REST + MCP server on one listener.
+**`-mode serve`** starts the REST + MCP server on one listener, and is the only
+way to run searches and scrapes. The former one-shot `-mode search` / `-scrape`
+test modes were removed once caching and memory moved the search/scrape flow
+behind the server, where the background job system is live.
 
 ```bash
 go mod tidy
 go run . -mode browse
-go run . -mode search -scrape
 go run . -mode serve
 ```
+
+## Cache & memory (in progress)
+
+The server minimizes web work through three Turso-backed stores plus a semantic
+memory, all fed by a single crash-safe job system. The design and its task
+breakdown live in `plans/cache-memory/`.
+
+- **Search cache** — normalized query → result URLs, with the query embedded so
+  a differently worded but equivalent question can hit a prior search. Short,
+  freshness-sensitive TTL.
+- **Scrape cache** — URL → fetched content, keyed exactly on URL, with a content
+  hash and ETag/Last-Modified conditional refresh. Replaces the old per-fetch
+  `scrapes` insert. No embedding.
+- **Memory** — atomic facts distilled from scraped pages, each embedded, tiered
+  and long-lived. Retrieval pulls the top-k relevant facts and the chat model
+  synthesizes an answer; a hit that clears the confidence gates skips the web.
+
+Every cache/memory row carries a tier (`short` / `long` / `permanent`) with
+sliding expiry: a hit slides its expiry forward, and enough hits promote `short`
+→ `long`. A write's `remember` flag picks the starting tier. A separate
+volatility label, emitted by the distiller, drives a freshness gate independent
+of the tier.
+
+Vectors live in a dedicated table with the ANN index, using Turso's native
+vector search. Embeddings and distillation run as deferred jobs — a row is
+stored first and its vector filled in later — so writes never block on the model
+service. Embedding uses Qwen3-Embedding-8B via a self-hosted, OpenAI-compatible
+llama.cpp endpoint configured under `[[llm.model]]`; a model or dimension change
+triggers a blue/green re-embed migration.
 
 ## Concurrency
 
@@ -101,8 +128,10 @@ downloaded.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/api/search` | `{terms, scrape}` → run id, URLs, optional scrape results |
-| POST | `/api/scrape` | `{urls}` or `{run_id}` → scrape ids |
+| POST | `/api/search` | `{terms, scrape, use_cache, use_memory, max_age_seconds, remember}` → source-tagged URLs and/or memory answers |
+| POST | `/api/scrape` | `{urls}` or `{run_id}`, plus `use_cache, max_age_seconds, remember` → scrape results with provenance |
+| POST | `/api/memory/query` | `{question}` → a synthesized answer when the confidence gates pass |
+| POST | `/api/memory/store` | `{text, source_url, volatility, remember}` → fact id |
 | GET | `/api/runs` | recent runs |
 | GET | `/api/runs/{id}` | run summary with counts |
 | GET | `/api/runs/{id}/urls` | URLs found, best rank first |
@@ -118,7 +147,9 @@ except `/healthz`.
 ## MCP
 
 Streamable HTTP at `/mcp`, on the same listener. Tools: `web_search`,
-`web_scrape`, `get_scrape`, `get_run`. Both write tools are synchronous and
+`web_scrape`, `get_scrape`, `get_run`, `memory_query`, `memory_store`.
+`web_search` consults memory first and tags every result by source
+(memory|cache|live). Both write tools are synchronous and
 bounded by `scrape.max_urls` and `scrape.total_timeout`, so a call cannot run
 past an LLM tool timeout; when the cap truncates a result the response says so.
 `web_scrape` returns text snippets capped at `snippet_chars` alongside the ids,
@@ -205,8 +236,8 @@ flag parsing.
 - API calls are synchronous by choice: the request blocks until the work is done
   rather than returning a job id. This bounds *when you get an answer*, not how
   the fetching runs — see Concurrency.
-- Re-scraping a URL inserts a new row rather than replacing; there is no cache
-  check, so repeated calls refetch.
+- Scrapes are cached by URL with conditional refresh, so repeated calls reuse
+  stored content (or a cheap 304) instead of refetching.
 - Don't point `-userdata` at your real Chrome profile — Chrome holds a
   `SingletonLock` on it. Keep a pristine copy of the harvest profile; once one
   gets flagged, restoring beats re-warming from nothing.

@@ -5,9 +5,10 @@
 # Turso supports multi-process access, so CLI and server can share these files.
 # Set true to refuse a second process instead.
 exclusive_lock = false
-# database/sql connection cap. 1 serialises writes (conservative while the
-# Turso bindings are beta). Raise it to use Turso's concurrency.
-max_open_conns = 1
+# database/sql connection cap. The job system runs concurrent workers, so this
+# is raised above 1; lower it to serialise writes if the beta Turso bindings
+# misbehave under concurrency.
+max_open_conns = 4
 # Driver name the Turso package registers with database/sql. Configurable
 # because the Go bindings have moved packages recently.
 driver = "turso"
@@ -76,3 +77,43 @@ read_timeout = "30s"
 write_timeout = "180s"
 # When set, required as `Authorization: Bearer <key>` on everything but /healthz.
 api_key = ""
+
+# LLM endpoints the app calls, all OpenAI-compatible. One entry per role via
+# `kind` ("chat" or "embed"); the first entry of each kind is used. Config only,
+# no CLI flags. Current setup: a self-hosted llama.cpp on the LAN.
+[[llm.model]]
+name = "chat"
+kind = "chat"
+endpoint = "http://192.168.178.64:8080"
+model = "local-chat"
+api_key = ""
+
+[[llm.model]]
+name = "embed"
+kind = "embed"
+endpoint = "http://192.168.178.64:8080"
+model = "Qwen3-Embedding-8B"
+# Embedding dimension, stamped on every vector row so a model/dim change is
+# detected and migrated. Qwen3-Embedding-8B is 4096.
+dim = 4096
+# Asymmetric embedding: the query carries an instruction, the document does not.
+query_prefix = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+doc_prefix = ""
+
+# Sliding-expiry tiers shared by the search cache, scrape cache and memory. On
+# each hit a row's expiry slides forward to now + its tier TTL; after
+# `promote_after_hits` hits a "short" row is promoted to "long". "permanent"
+# rows (set via the remember flag) never expire.
+[cache]
+short_ttl = "240h"   # 10 days
+long_ttl = "1080h"   # 45 days
+promote_after_hits = 3
+cleanup_interval = "1h"
+
+# Confidence gates deciding whether a memory hit may skip a web search.
+[memory]
+similarity_threshold = 0.85
+upsert_threshold = 0.95
+top_k = 8
+gate3_enabled = true
+remember_default = "short"

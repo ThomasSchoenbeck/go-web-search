@@ -28,6 +28,9 @@ type Config struct {
 	Search   SearchConfig   `toml:"search"`
 	Scrape   ScrapeConfig   `toml:"scrape"`
 	Server   ServerConfig   `toml:"server"`
+	LLM      LLMConfig      `toml:"llm"`
+	Cache    TierConfig     `toml:"cache"`
+	Memory   MemoryConfig   `toml:"memory"`
 }
 
 type DatabaseConfig struct {
@@ -104,6 +107,49 @@ type ServerConfig struct {
 	APIKey string `toml:"api_key"`
 }
 
+// LLMConfig lists model endpoints the app can call. Entries are keyed by role
+// via Kind ("chat" or "embed"); the first entry of each kind is the active one.
+// Every endpoint is OpenAI-compatible, so a self-hosted llama.cpp and a hosted
+// provider are configured the same way. Config file only, no CLI flags.
+type LLMConfig struct {
+	Models []LLMModel `toml:"model"`
+}
+
+type LLMModel struct {
+	Name     string `toml:"name"`
+	Kind     string `toml:"kind"`     // "chat" or "embed"
+	Endpoint string `toml:"endpoint"` // OpenAI-compatible base URL
+	Model    string `toml:"model"`    // model id sent in the request body
+	APIKey   string `toml:"api_key"`  // optional bearer token
+	// Dim is the embedding dimension for an "embed" model. It is stamped onto
+	// every vector row so a model/dim change can be detected and migrated.
+	Dim int `toml:"dim"`
+	// QueryPrefix and DocPrefix implement asymmetric embedding: a query and a
+	// stored document are embedded with different instructions. Qwen3-Embedding
+	// wants an instruction on the query and none on the document.
+	QueryPrefix string `toml:"query_prefix"`
+	DocPrefix   string `toml:"doc_prefix"`
+}
+
+// TierConfig drives the shared sliding-expiry / promotion behaviour across the
+// search cache, scrape cache and memory. "permanent" rows never expire.
+type TierConfig struct {
+	ShortTTL         Duration `toml:"short_ttl"`
+	LongTTL          Duration `toml:"long_ttl"`
+	PromoteAfterHits int      `toml:"promote_after_hits"`
+	CleanupInterval  Duration `toml:"cleanup_interval"`
+}
+
+// MemoryConfig tunes the confidence gates that decide whether a memory hit may
+// skip a web search, and the semantic-upsert threshold used when storing facts.
+type MemoryConfig struct {
+	SimilarityThreshold float64 `toml:"similarity_threshold"`
+	UpsertThreshold     float64 `toml:"upsert_threshold"`
+	TopK                int     `toml:"top_k"`
+	Gate3Enabled        bool    `toml:"gate3_enabled"`
+	RememberDefault     string  `toml:"remember_default"`
+}
+
 func defaultConfig() Config {
 	return Config{
 		Database: DatabaseConfig{
@@ -111,7 +157,7 @@ func defaultConfig() Config {
 			DataDir:      "./data",
 			MainDB:       "go-web-search.db",
 			LogDB:        "go-web-search-logs.db",
-			MaxOpenConns: 1,
+			MaxOpenConns: 4,
 		},
 		Browser: BrowserConfig{
 			Headless:    false,
@@ -152,6 +198,37 @@ func defaultConfig() Config {
 			Addr:         "0.0.0.0:8081",
 			ReadTimeout:  Duration{30 * time.Second},
 			WriteTimeout: Duration{180 * time.Second},
+		},
+		LLM: LLMConfig{
+			Models: []LLMModel{
+				{
+					Name:     "chat",
+					Kind:     "chat",
+					Endpoint: "http://192.168.178.64:8080",
+					Model:    "local-chat",
+				},
+				{
+					Name:        "embed",
+					Kind:        "embed",
+					Endpoint:    "http://192.168.178.64:8080",
+					Model:       "Qwen3-Embedding-8B",
+					Dim:         4096,
+					QueryPrefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+				},
+			},
+		},
+		Cache: TierConfig{
+			ShortTTL:         Duration{10 * 24 * time.Hour},
+			LongTTL:          Duration{45 * 24 * time.Hour},
+			PromoteAfterHits: 3,
+			CleanupInterval:  Duration{1 * time.Hour},
+		},
+		Memory: MemoryConfig{
+			SimilarityThreshold: 0.85,
+			UpsertThreshold:     0.95,
+			TopK:                8,
+			Gate3Enabled:        true,
+			RememberDefault:     "short",
 		},
 	}
 }

@@ -14,30 +14,41 @@ import (
 )
 
 type apiServer struct {
-	cfg  Config
-	h    *harvester
-	http *http.Server
+	cfg      Config
+	h        *harvester
+	llm      *LLMClient
+	resolver *resolver
+	http     *http.Server
 }
 
 // ---- request and response shapes, shared by REST and MCP ----
 
 type SearchRequest struct {
-	Terms  []string `json:"terms" jsonschema:"search terms to run"`
-	Scrape bool     `json:"scrape,omitempty" jsonschema:"also scrape the URLs that were found"`
+	Terms     []string `json:"terms" jsonschema:"search terms to run"`
+	Scrape    bool     `json:"scrape,omitempty" jsonschema:"also scrape the URLs that were found"`
+	UseCache  *bool    `json:"use_cache,omitempty" jsonschema:"reuse the search cache (default true); set false to force a live search"`
+	UseMemory *bool    `json:"use_memory,omitempty" jsonschema:"consult memory first and skip the web when it can answer (default true)"`
+	MaxAge    int      `json:"max_age_seconds,omitempty" jsonschema:"reject cached or remembered results older than this many seconds"`
+	Remember  string   `json:"remember,omitempty" jsonschema:"how durably to keep what is learned: short, long, permanent, or off (default short)"`
 }
 
 type SearchResponse struct {
-	RunID    string          `json:"run_id"`
-	Terms    int             `json:"terms"`
-	URLs     []URLRow        `json:"urls"`
-	Scrapes  []ScrapeOutcome `json:"scrapes,omitempty"`
-	Complete bool            `json:"complete"`
-	Note     string          `json:"note,omitempty"`
+	RunID    string            `json:"run_id,omitempty"`
+	Terms    int               `json:"terms"`
+	Source   string            `json:"source,omitempty"`
+	Answers  map[string]string `json:"answers,omitempty"`
+	URLs     []CachedURL       `json:"urls"`
+	Scrapes  []ScrapeOutcome   `json:"scrapes,omitempty"`
+	Complete bool              `json:"complete"`
+	Note     string            `json:"note,omitempty"`
 }
 
 type ScrapeRequest struct {
-	URLs  []string `json:"urls" jsonschema:"absolute URLs to fetch"`
-	RunID string   `json:"run_id,omitempty" jsonschema:"when passed with urls, links scrapes to the search that found them; when passed without urls, scrapes everything that run found (use only when full coverage is needed)"`
+	URLs     []string `json:"urls" jsonschema:"absolute URLs to fetch"`
+	RunID    string   `json:"run_id,omitempty" jsonschema:"when passed with urls, links scrapes to the search that found them; when passed without urls, scrapes everything that run found (use only when full coverage is needed)"`
+	UseCache *bool    `json:"use_cache,omitempty" jsonschema:"reuse the scrape cache (default true); set false to force a fresh fetch"`
+	MaxAge   int      `json:"max_age_seconds,omitempty" jsonschema:"reject cached content older than this many seconds"`
+	Remember string   `json:"remember,omitempty" jsonschema:"distil scraped pages into memory at this durability: short, long, permanent, or off (default short)"`
 }
 
 type ScrapeResponse struct {
@@ -57,11 +68,14 @@ type Snippet struct {
 }
 
 func newAPIServer(cfg Config, h *harvester) *apiServer {
-	s := &apiServer{cfg: cfg, h: h}
+	llm := newLLMClient(cfg.LLM, 60*time.Second)
+	s := &apiServer{cfg: cfg, h: h, llm: llm, resolver: newResolver(cfg, h.store, llm, h)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/search", s.handleSearch)
 	mux.HandleFunc("POST /api/scrape", s.handleScrape)
+	mux.HandleFunc("POST /api/memory/query", s.handleMemoryQuery)
+	mux.HandleFunc("POST /api/memory/store", s.handleMemoryStore)
 	mux.HandleFunc("GET /api/runs", s.handleListRuns)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleGetRun)
 	mux.HandleFunc("GET /api/runs/{id}/urls", s.handleRunURLs)
@@ -138,74 +152,266 @@ func (s *apiServer) runSearch(ctx context.Context, req SearchRequest) (*SearchRe
 	if len(req.Terms) == 0 {
 		return nil, errors.New("at least one search term is required")
 	}
-
-	runID, err := s.h.store.StartRun(ctx, "api-search", "")
-	if err != nil {
-		return nil, err
-	}
-	defer s.h.store.FinishRun(ctx, runID)
-
-	never := context.Background() // no signal handling inside a request
-	complete, err := s.h.SearchTerms(ctx, runID, req.Terms, never)
-	if err != nil {
-		return nil, err
+	o := resolveOpts{
+		useMemory: boolOr(req.UseMemory, true),
+		useCache:  boolOr(req.UseCache, true),
+		maxAge:    time.Duration(req.MaxAge) * time.Second,
+		remember:  req.Remember,
 	}
 
-	urls, err := s.h.store.RunURLs(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
+	resp := &SearchResponse{Terms: len(req.Terms), Answers: map[string]string{}, Complete: true}
+	sources := map[string]bool{}
+	seen := map[string]bool{}
 
-	resp := &SearchResponse{RunID: runID, Terms: len(req.Terms), URLs: urls, Complete: complete}
-
-	if req.Scrape && s.cfg.Scrape.Enabled {
-		outcomes, err := s.h.ScrapeRun(ctx, runID)
+	// The memory -> cache -> engines chain runs per term in the resolver.
+	for _, term := range req.Terms {
+		out, err := s.resolver.Search(ctx, term, o)
 		if err != nil {
 			return nil, err
 		}
-		resp.Scrapes = outcomes
-		if len(urls) > s.cfg.Scrape.MaxURLs {
+		sources[out.Source] = true
+		if out.Source == "memory" {
+			resp.Answers[term] = out.Answer
+			continue
+		}
+		if out.RunID != "" {
+			resp.RunID = out.RunID
+		}
+		for _, u := range out.URLs {
+			if !seen[u.URL] {
+				seen[u.URL] = true
+				resp.URLs = append(resp.URLs, u)
+			}
+		}
+	}
+	resp.Source = combineSources(sources)
+	if len(resp.Answers) == 0 {
+		resp.Answers = nil
+	}
+
+	if req.Scrape && s.cfg.Scrape.Enabled && len(resp.URLs) > 0 {
+		runID := resp.RunID
+		if runID == "" {
+			id, err := s.h.store.StartRun(ctx, "api-scrape", "")
+			if err != nil {
+				return nil, err
+			}
+			defer s.h.store.FinishRun(ctx, id)
+			runID = id
+		}
+		urls := make([]string, len(resp.URLs))
+		for i, u := range resp.URLs {
+			urls[i] = u.URL
+		}
+		resp.Scrapes = s.h.scraper.Scrape(ctx, runID, urls, o.useCache, o.maxAge)
+		s.rememberScrapes(ctx, req.Remember, resp.Scrapes)
+		if len(resp.URLs) > s.cfg.Scrape.MaxURLs {
 			resp.Note = fmt.Sprintf("scraped the first %d of %d URLs (scrape.max_urls); "+
-				"fetch the rest with POST /api/scrape", s.cfg.Scrape.MaxURLs, len(urls))
+				"fetch the rest with POST /api/scrape", s.cfg.Scrape.MaxURLs, len(resp.URLs))
 		}
 	}
 	return resp, nil
 }
 
 func (s *apiServer) runScrape(ctx context.Context, req ScrapeRequest) (*ScrapeResponse, error) {
+	useCache := boolOr(req.UseCache, true)
+	maxAge := time.Duration(req.MaxAge) * time.Second
+
 	var (
 		outcomes []ScrapeOutcome
-		err      error
 		runID    string
 	)
 	switch {
 	case req.RunID != "" && len(req.URLs) == 0:
 		// Batch scrape: fetch every URL a previous run found.
-		outcomes, err = s.h.ScrapeRun(ctx, req.RunID)
+		rows, err := s.h.store.RunURLs(ctx, req.RunID)
+		if err != nil {
+			return nil, err
+		}
+		urls := make([]string, len(rows))
+		for i, r := range rows {
+			urls[i] = r.URL
+		}
+		outcomes = s.h.scraper.Scrape(ctx, req.RunID, urls, useCache, maxAge)
 		runID = req.RunID
 	case len(req.URLs) > 0:
-		// Selective scrape: fetch only the given URLs.
 		if req.RunID != "" {
 			// Associated with an existing search run for tracing.
-			outcomes = s.h.ScrapeURLs(ctx, req.RunID, req.URLs)
+			outcomes = s.h.scraper.Scrape(ctx, req.RunID, req.URLs, useCache, maxAge)
 			runID = req.RunID
 		} else {
 			// Direct scrape: no parent search, create its own run.
-			runID, err = s.h.store.StartRun(ctx, "api-scrape", "")
+			id, err := s.h.store.StartRun(ctx, "api-scrape", "")
 			if err != nil {
 				return nil, err
 			}
-			defer s.h.store.FinishRun(ctx, runID)
-			outcomes = s.h.ScrapeURLs(ctx, runID, req.URLs)
-			runID = runID
+			defer s.h.store.FinishRun(ctx, id)
+			outcomes = s.h.scraper.Scrape(ctx, id, req.URLs, useCache, maxAge)
+			runID = id
 		}
 	default:
 		return nil, errors.New("provide either urls or run_id")
 	}
+	s.rememberScrapes(ctx, req.Remember, outcomes)
+	return &ScrapeResponse{RunID: runID, Results: outcomes}, nil
+}
+
+// boolOr resolves an optional bool flag to its default when unset.
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// combineSources labels a multi-term search by where its results came from.
+func combineSources(m map[string]bool) string {
+	switch len(m) {
+	case 0:
+		return "live"
+	case 1:
+		for k := range m {
+			return k
+		}
+	}
+	return "mixed"
+}
+
+// rememberTier interprets the remember flag: off disables storage, an explicit
+// tier is used as-is, anything else defaults to on at the configured tier.
+func rememberTier(remember, def string) (store bool, tier string) {
+	switch strings.ToLower(strings.TrimSpace(remember)) {
+	case "off", "none", "no", "false":
+		return false, ""
+	case tierShort, tierLong, tierPermanent:
+		return true, remember
+	default:
+		return true, def
+	}
+}
+
+// rememberScrapes enqueues distillation of successful scrapes into memory unless
+// the caller turned remembering off.
+func (s *apiServer) rememberScrapes(ctx context.Context, remember string, outcomes []ScrapeOutcome) {
+	store, tier := rememberTier(remember, s.cfg.Memory.RememberDefault)
+	if !store {
+		return
+	}
+	for _, o := range outcomes {
+		if o.ScrapeID != "" && o.TextChars > 0 {
+			if err := enqueueDistill(ctx, s.h.store, o.ScrapeID, tier); err != nil {
+				s.h.log.Printf("remember: enqueue distill for %s: %v", o.ScrapeID, err)
+			}
+		}
+	}
+}
+
+// ---- memory operations, shared by REST and MCP ----
+
+type MemoryQueryRequest struct {
+	Question string `json:"question" jsonschema:"the question to try to answer from memory"`
+}
+
+type MemoryFactView struct {
+	Text       string  `json:"text"`
+	SourceURL  string  `json:"source_url,omitempty"`
+	Volatility string  `json:"volatility,omitempty"`
+	Similarity float64 `json:"similarity,omitempty"`
+}
+
+type MemoryQueryResponse struct {
+	Found  bool             `json:"found"`
+	Answer string           `json:"answer,omitempty"`
+	Facts  []MemoryFactView `json:"facts,omitempty"`
+}
+
+type MemoryStoreRequest struct {
+	Text       string `json:"text" jsonschema:"the fact to remember, stated so it stands alone"`
+	SourceURL  string `json:"source_url,omitempty" jsonschema:"where the fact came from"`
+	Volatility string `json:"volatility,omitempty" jsonschema:"stable or time-sensitive"`
+	Remember   string `json:"remember,omitempty" jsonschema:"durability: short, long or permanent (default short)"`
+}
+
+type MemoryStoreResponse struct {
+	ID string `json:"id"`
+}
+
+func (s *apiServer) runMemoryQuery(ctx context.Context, req MemoryQueryRequest) (*MemoryQueryResponse, error) {
+	if strings.TrimSpace(req.Question) == "" {
+		return nil, errors.New("question is required")
+	}
+	ans, facts, ok, err := MemoryAnswer(ctx, s.h.store, s.llm, s.cfg.Cache, s.cfg.Memory, req.Question)
 	if err != nil {
 		return nil, err
 	}
-	return &ScrapeResponse{RunID: runID, Results: outcomes}, nil
+	resp := &MemoryQueryResponse{Found: ok, Answer: ans}
+	for _, f := range facts {
+		resp.Facts = append(resp.Facts, MemoryFactView{
+			Text: f.Text, SourceURL: f.SourceURL, Volatility: f.Volatility, Similarity: f.Similarity,
+		})
+	}
+	return resp, nil
+}
+
+func (s *apiServer) runMemoryStore(ctx context.Context, req MemoryStoreRequest) (*MemoryStoreResponse, error) {
+	if strings.TrimSpace(req.Text) == "" {
+		return nil, errors.New("text is required")
+	}
+	store, tier := rememberTier(req.Remember, s.cfg.Memory.RememberDefault)
+	if !store {
+		return nil, errors.New("remember is off; nothing stored")
+	}
+	id, err := s.h.store.StoreFact(ctx, s.cfg.Cache, s.cfg.Memory, s.llm, req.Text, req.SourceURL, req.Volatility, tier)
+	if err != nil {
+		return nil, err
+	}
+	return &MemoryStoreResponse{ID: id}, nil
+}
+
+func (s *apiServer) handleMemoryQuery(w http.ResponseWriter, r *http.Request) {
+	var req MemoryQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := s.runMemoryQuery(r.Context(), req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *apiServer) handleMemoryStore(w http.ResponseWriter, r *http.Request) {
+	var req MemoryStoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := s.runMemoryStore(r.Context(), req)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *apiServer) mcpMemoryQuery(ctx context.Context, _ *mcp.CallToolRequest, in MemoryQueryRequest) (
+	*mcp.CallToolResult, MemoryQueryResponse, error) {
+	resp, err := s.runMemoryQuery(ctx, in)
+	if err != nil {
+		return nil, MemoryQueryResponse{}, err
+	}
+	return nil, *resp, nil
+}
+
+func (s *apiServer) mcpMemoryStore(ctx context.Context, _ *mcp.CallToolRequest, in MemoryStoreRequest) (
+	*mcp.CallToolResult, MemoryStoreResponse, error) {
+	resp, err := s.runMemoryStore(ctx, in)
+	if err != nil {
+		return nil, MemoryStoreResponse{}, err
+	}
+	return nil, *resp, nil
 }
 
 // snippetsFor loads capped text for each successful scrape, which is what makes
@@ -351,10 +557,13 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "web_search",
-		Description: "Search Google, Bing and DuckDuckGo for one or more terms and return the " +
-			"destination URLs found across all three engines. Set scrape=true to also fetch " +
-			"the page contents of every URL found. Returns a run_id for tracing; full details " +
-			"stay retrievable by id.",
+		Description: "Search the web for one or more terms and return the destination URLs. " +
+			"Memory is consulted first and, when it can answer confidently, the response carries an " +
+			"'answers' entry with source='memory' instead of hitting the web; otherwise a cached or " +
+			"live result is returned, tagged by 'source' (memory|cache|live|mixed). use_cache and " +
+			"use_memory default true; set either false to bypass. remember (short|long|permanent|off) " +
+			"sets how durably anything scraped is kept. Set scrape=true to also fetch page contents. " +
+			"Full details stay retrievable by id.",
 	}, s.mcpSearch)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -364,7 +573,10 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 			"like /roster, /stats, /news, /videos, /about, and don't cluster on a single site. " +
 			"Pass the run_id from web_search to link scrapes back to that search for tracing. " +
 			"For direct scrapes (no prior search), just pass urls — a run is created automatically. " +
-			"Returns text snippets plus scrape ids for the full documents.",
+			"use_cache defaults true (a fresh cached copy is returned without refetching; provenance " +
+			"is reported in fetched_with as cache/cache-revalidated/http/browser). remember " +
+			"(short|long|permanent|off) distils the pages into memory for later. Returns text " +
+			"snippets plus scrape ids for the full documents.",
 	}, s.mcpScrape)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -376,6 +588,19 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 		Name:        "get_run",
 		Description: "Summarise a run by id: how many searches, urls and scrapes it produced.",
 	}, s.mcpGetRun)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "memory_query",
+		Description: "Ask what is already known, from facts distilled out of earlier scrapes. " +
+			"Returns found=true with a synthesized answer only when memory clears the confidence " +
+			"gates; otherwise found=false and you should web_search instead.",
+	}, s.mcpMemoryQuery)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "memory_store",
+		Description: "Remember a single self-contained fact directly, without scraping. " +
+			"remember sets durability (short|long|permanent).",
+	}, s.mcpMemoryStore)
 
 	return server
 }
@@ -435,6 +660,19 @@ func (s *apiServer) mcpGetRun(ctx context.Context, _ *mcp.CallToolRequest, in ge
 // serveMode runs the HTTP server until a signal arrives.
 func serveMode(cfg Config, art *artifacts, h *harvester, stop context.Context) error {
 	srv := newAPIServer(cfg, h)
+
+	// Background job system: worker pool + poller + reaper. Handlers (embed,
+	// distill, cleanup, re-embed) are registered on the runner as those
+	// subsystems land. Cancelling jobCtx on shutdown stops every goroutine.
+	jobCtx, jobCancel := context.WithCancel(context.Background())
+	defer jobCancel()
+	llm := newLLMClient(cfg.LLM, 60*time.Second)
+	runner := newJobRunner(h.store, art.Log, cfg.Database.MaxOpenConns, time.Second)
+	registerJobs(runner, cfg, h, llm)
+	runner.Start(jobCtx)
+	if err := bootVectors(jobCtx, h.store, llm, art.Log); err != nil {
+		art.Log.Printf("WARNING: vector boot/migration check failed: %v", err)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
