@@ -33,8 +33,8 @@ min_delay = "2s"
 max_delay = "11s"
 query_timeout = "90s"
 artifact_dir = "runs"
-engine_stagger = "1500ms"
-engine_jitter = "1200ms"
+engine_stagger = "500ms"
+engine_jitter = "200ms"
 
 # Result counts only apply to engines NOT in `typed`, since a typed search lets
 # the engine build its own URL. 0 or absent means no count parameter is sent.
@@ -72,7 +72,7 @@ total_timeout = "120s"
 snippet_chars = 2000
 
 [server]
-addr = "0.0.0.0:8081"
+addr = "0.0.0.0:8082"
 read_timeout = "30s"
 write_timeout = "180s"
 # When set, required as `Authorization: Bearer <key>` on everything but /healthz.
@@ -85,14 +85,14 @@ api_key = ""
 name = "chat"
 kind = "chat"
 endpoint = "http://192.168.178.64:8080"
-model = "local-chat"
-api_key = ""
+model = "3^c262^kv_q8^Qwen3.6-27B-UD-Q5_K_XL"
+api_key = "no-key"
 
 [[llm.model]]
 name = "embed"
 kind = "embed"
 endpoint = "http://192.168.178.64:8080"
-model = "Qwen3-Embedding-8B"
+model = "4^qwen3-8b:Q8"
 # Embedding dimension, stamped on every vector row so a model/dim change is
 # detected and migrated. Qwen3-Embedding-8B is 4096.
 dim = 4096
