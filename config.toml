@@ -15,6 +15,10 @@ driver = "turso"
 data_dir = "./data"
 main_db = "harvester.db"
 log_db = "harvester-logs.db"
+# PRAGMA auto_vacuum, applied only on a FRESH database — it can't be flipped on a
+# non-empty file. "full" reclaims freed pages continuously; "none" relies solely
+# on explicit VACUUM. Drop the db file for this to take effect.
+auto_vacuum = "full"
 
 [browser]
 headless = false
@@ -29,10 +33,15 @@ terms_file = "terms.txt"
 engines = ["google", "bing", "duckduckgo"]
 # Engines that type into the search box instead of loading a results URL.
 typed = ["google", "bing", "duckduckgo"]
+# Result URLs on these domains are dropped across every engine, in addition to
+# each engine's built-in infrastructure skip list. "msn.com" also matches
+# "www.msn.com". Edit this list instead of engine.go; no rebuild of engine
+# definitions needed. Other homepage-chrome offenders you may want here:
+# "microsoft365.com", "onenote.com", "outlook.com", "onedrive.live.com".
+exclude_hosts = ["msn.com"]
 min_delay = "2s"
 max_delay = "11s"
 query_timeout = "90s"
-artifact_dir = "runs"
 engine_stagger = "500ms"
 engine_jitter = "200ms"
 
@@ -81,24 +90,73 @@ api_key = ""
 # LLM endpoints the app calls, all OpenAI-compatible. One entry per role via
 # `kind` ("chat" or "embed"); the first entry of each kind is used. Config only,
 # no CLI flags. Current setup: a self-hosted llama.cpp on the LAN.
+[llm]
+# Bounds every LLM HTTP call. A multimodel llama-server cold-loads a model into
+# VRAM on first hit, which can exceed a minute, so keep this generous.
+timeout = "1200s"
+# How many embedding requests run at once during a bulk re-embed. Match this to
+# your embed server's parallel slot count (you ran qwen3-embed-8B with 4).
+embed_concurrency = 4
+
 [[llm.model]]
 name = "chat"
 kind = "chat"
 endpoint = "http://192.168.178.64:8080"
-model = "3^c262^kv_q8^Qwen3.6-27B-UD-Q5_K_XL"
+# model = "3^c262^kv_q8^Qwen3.6-27B-UD-Q5_K_XL"
+model = "3^c262^kv_q8^Qwen3.6-35B-A3B-UD-Q5_K_XL"
 api_key = "no-key"
+extra_body = { reasoning_budget = 512 }
+# OpenAI route prefix. Omit for the standard "/v1". If your multimodel
+# llama-server serves chat/embeddings at the root, uncomment the next line:
+# api_path = ""
+# Append Qwen's "/no_think" soft switch to the prompt to disable thinking. Works
+# at the model level regardless of build, so it's the reliable fallback if the
+# extra_body reasoning fields aren't honored.
+# no_think = true
+# Cap chat output tokens (0/omitted = off; let the server decide). Handy to
+# bound a runaway thinking model.
+# max_tokens = 2048
+# Extra fields merged verbatim into the chat request body, for knobs the fixed
+# fields don't cover. Support is build-dependent; try these to tame Qwen
+# thinking (newest-build path first):
+#   extra_body = { reasoning_budget = 0 }                                # per-request off, needs recent llama.cpp (>= b9982)
+#   extra_body = { chat_template_kwargs = { enable_thinking = false } }  # older template-kwargs path
+# For a "thinking level" rather than off, give a token budget, e.g.
+#   extra_body = { reasoning_budget = 512 }
+# If your build honors none of these, append "/no_think" to prompts instead.
 
 [[llm.model]]
 name = "embed"
 kind = "embed"
 endpoint = "http://192.168.178.64:8080"
 model = "4^qwen3-8b:Q8"
+# api_path = ""  # uncomment if embeddings are served at the root, not /v1
 # Embedding dimension, stamped on every vector row so a model/dim change is
 # detected and migrated. Qwen3-Embedding-8B is 4096.
 dim = 4096
 # Asymmetric embedding: the query carries an instruction, the document does not.
 query_prefix = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
 doc_prefix = ""
+
+[jobs]
+# How long a running job may go before the reaper assumes its worker died and
+# requeues it. Must stay ABOVE the longest a job can take — for distill that is
+# one chat call bounded by llm.timeout (1200s above) — or long distills get
+# reaped mid-flight and run a second time, doubling LLM load. Downside of a high
+# value: a genuinely crashed job takes this long to be retried.
+stale_after = "30m"
+
+# Shrinking the database beyond tier expiry. One sweep clears large,
+# already-processed blobs nothing reads afterwards — scrape raw_html/clean_html
+# (nulled; text_content is kept) and search SERP HTML (deleted) — for rows older
+# than raw_max_age, except the newest raw_keep_last of each kind (debug). It runs
+# hourly with cleanup and once at startup. VACUUM then returns the freed space.
+[retention]
+trim_raw = true
+raw_max_age = "48h"
+raw_keep_last = 10
+vacuum_on_startup = true
+vacuum_at = ""        # optional daily "HH:MM" (local) to also VACUUM mid-run; empty = off
 
 # Sliding-expiry tiers shared by the search cache, scrape cache and memory. On
 # each hit a row's expiry slides forward to now + its tier TTL; after

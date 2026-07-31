@@ -14,11 +14,13 @@ import (
 // at runtime (not in schema.sql) because its dimension is config-driven and a
 // model/dimension change spins up a new generation table (see reembed.go).
 //
-// VERIFY (Turso, beta): the vector column type F32_BLOB(dim), the ANN index via
-// libsql_vector_idx, and the vector32()/vector_top_k()/vector_distance_cos()
-// functions are the documented Turso/libSQL forms. Confirm they are implemented
-// in the pinned tursogo v0.7.1 before relying on this; the function names are
-// centralised here so a rename is a one-file change.
+// tursogo v0.7.1 is the Rust Turso engine, not libSQL: it implements F32_BLOB
+// columns and the vector32()/vector_distance_cos() functions, but NOT libSQL's
+// libsql_vector_idx ANN index or vector_top_k(). There is therefore no
+// approximate index here; VectorSearch does an exact linear scan with
+// vector_distance_cos, which is fine at the scale of a local research tool. If
+// this ever moves to a libSQL backend, add the ANN index in ensureVectorTable
+// and switch VectorSearch back to vector_top_k.
 
 const (
 	metaVectorTable = "vector_table" // active vectors table name
@@ -38,20 +40,34 @@ type VectorHit struct {
 // ensureVectorTable creates a generation table and its indexes if absent. name
 // is internally generated and dim is an int, so the fmt-built DDL is safe.
 func (s *Store) ensureVectorTable(ctx context.Context, name string, dim int) error {
-	ddl := fmt.Sprintf(`
-CREATE TABLE IF NOT EXISTS %[1]s (
+	// No ANN index: the Rust Turso engine has no libsql_vector_idx, so search is
+	// an exact linear scan (see VectorSearch). Each statement runs on its own so
+	// a driver rejection names exactly which one failed rather than a single
+	// opaque error.
+	steps := []struct {
+		what string
+		ddl  string
+	}{
+		{
+			"create table (F32_BLOB column)",
+			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %[1]s (
     id         TEXT NOT NULL,
     owner_kind TEXT NOT NULL,
     embedding  F32_BLOB(%[2]d) NOT NULL,
     model      TEXT NOT NULL,
     dim        INTEGER NOT NULL,
     created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_owner_idx ON %[1]s (owner_kind, id);
-CREATE INDEX IF NOT EXISTS %[1]s_ann ON %[1]s (libsql_vector_idx(embedding, 'metric=cosine'));`,
-		name, dim)
-	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
-		return fmt.Errorf("creating vector table %s: %w", name, err)
+)`, name, dim),
+		},
+		{
+			"unique owner index",
+			fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %[1]s_owner_idx ON %[1]s (owner_kind, id)`, name),
+		},
+	}
+	for _, step := range steps {
+		if _, err := s.db.ExecContext(ctx, step.ddl); err != nil {
+			return fmt.Errorf("vector table %s: %s failed: %w", name, step.what, err)
+		}
 	}
 	return nil
 }
@@ -85,25 +101,22 @@ func (s *Store) DeleteVector(ctx context.Context, table, ownerKind, id string) e
 }
 
 // VectorSearch returns the k nearest owner ids of a kind to the query vector.
-// It over-fetches from the ANN index and then filters by owner_kind, because the
-// index is shared across kinds and vector_top_k ranks globally.
+// The Rust Turso engine has no ANN index, so this is an exact linear scan:
+// vector_distance_cos against every row of the kind, ordered by distance. At the
+// scale of a local research tool that is cheap; if the table ever grows large,
+// this is the place to reintroduce an approximate index.
 func (s *Store) VectorSearch(ctx context.Context, table, ownerKind string, query []float32, k int) ([]VectorHit, error) {
 	if k <= 0 {
 		k = 8
 	}
-	overfetch := k * 4
-	if overfetch < 20 {
-		overfetch = 20
-	}
 	lit := vectorLiteral(query)
 	rows, err := s.db.QueryContext(ctx,
 		fmt.Sprintf(`SELECT v.id, vector_distance_cos(v.embedding, vector32(?)) AS dist
-		               FROM vector_top_k('%[1]s_ann', vector32(?), ?) AS t
-		               JOIN %[1]s v ON v.rowid = t.id
+		               FROM %s v
 		              WHERE v.owner_kind = ?
 		              ORDER BY dist
 		              LIMIT ?`, table),
-		lit, lit, overfetch, ownerKind, k)
+		lit, ownerKind, k)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}

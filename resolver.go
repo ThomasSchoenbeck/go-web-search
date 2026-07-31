@@ -61,7 +61,7 @@ func (r *resolver) Search(ctx context.Context, query string, o resolveOpts) (*Se
 		if e, ok, err := r.store.LookupSearchCacheExact(ctx, r.cfg.Cache, query, o.maxAge); err == nil && ok {
 			return &SearchOutcome{Source: "cache", URLs: e.Results}, nil
 		}
-		if qv, err := r.llm.Embed(ctx, []string{query}, true); err == nil && len(qv) == 1 {
+		if qv, err := r.llm.Embed(ctx, []string{query}, true, "search cache lookup"); err == nil && len(qv) == 1 {
 			if e, ok, err := r.store.LookupSearchCacheSemantic(ctx, r.cfg.Cache, r.cfg.Memory, qv[0], o.maxAge); err == nil && ok {
 				return &SearchOutcome{Source: "cache", URLs: e.Results}, nil
 			}

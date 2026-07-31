@@ -29,7 +29,7 @@ type Store struct {
 	db *sql.DB
 }
 
-func openStore(driver, path string, maxConns int) (*Store, error) {
+func openStore(driver, path string, maxConns int, autoVacuum string) (*Store, error) {
 	db, err := sql.Open(driver, path)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s with driver %q: %w", path, driver, err)
@@ -37,17 +37,41 @@ func openStore(driver, path string, maxConns int) (*Store, error) {
 	if maxConns <= 0 {
 		maxConns = 1
 	}
-	db.SetMaxOpenConns(maxConns)
 
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connecting to %s: %w", path, err)
 	}
+
+	// Pin to one connection so the auto_vacuum PRAGMA and the schema land on the
+	// same connection: auto_vacuum only takes on a fresh, still-empty database,
+	// so it must precede the first CREATE TABLE. Best-effort — a driver that
+	// lacks it, or a non-empty file, just ignores the setting.
+	db.SetMaxOpenConns(1)
+	if mode := normalizeAutoVacuum(autoVacuum); mode != "" {
+		if _, err := db.Exec("PRAGMA auto_vacuum = " + mode); err != nil {
+			_ = err // best-effort
+		}
+	}
 	if _, err := db.Exec(mainSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("applying schema to %s: %w", path, err)
 	}
+	db.SetMaxOpenConns(maxConns)
 	return &Store{db: db}, nil
+}
+
+// normalizeAutoVacuum maps a config value to a safe PRAGMA keyword (never raw
+// user text into SQL). Anything but full/incremental means "leave it alone".
+func normalizeAutoVacuum(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "full":
+		return "FULL"
+	case "incremental":
+		return "INCREMENTAL"
+	default:
+		return ""
+	}
 }
 
 func (s *Store) Close() error { return s.db.Close() }

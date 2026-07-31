@@ -33,7 +33,7 @@ func MemoryAnswer(ctx context.Context, store *Store, llm *LLMClient, cfg TierCon
 	if err != nil || !ready || table == "" {
 		return "", nil, false, err
 	}
-	qvecs, err := llm.Embed(ctx, []string{question}, true)
+	qvecs, err := llm.Embed(ctx, []string{question}, true, "memory query")
 	if err != nil {
 		return "", nil, false, err
 	}

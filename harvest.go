@@ -162,7 +162,10 @@ func (h *harvester) queryEngine(ctx context.Context, runID, term string, e engin
 	rec.AnchorCount = len(res.links)
 	rec.RawHTML = res.html
 	rec.Blocked = looksBlocked(res.landedURL, res.html)
-	rec.URLs = destinations(res.links, e.skipLabels, e.skipHosts)
+	// Merge the engine's built-in skip hosts with the operator's global
+	// exclude_hosts list, without mutating the shared engine definition.
+	skipHosts := append(append([]string{}, e.skipHosts...), h.cfg.Search.ExcludeHosts...)
+	rec.URLs = destinations(res.links, e.skipLabels, skipHosts)
 
 	if rec.SearchMode == "typed" {
 		if got := landedQuery(res.landedURL); got != "" && !sameQuery(got, term) {

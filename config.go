@@ -29,8 +29,37 @@ type Config struct {
 	Scrape   ScrapeConfig   `toml:"scrape"`
 	Server   ServerConfig   `toml:"server"`
 	LLM      LLMConfig      `toml:"llm"`
-	Cache    TierConfig     `toml:"cache"`
-	Memory   MemoryConfig   `toml:"memory"`
+	Jobs      JobsConfig      `toml:"jobs"`
+	Retention RetentionConfig `toml:"retention"`
+	Cache     TierConfig      `toml:"cache"`
+	Memory    MemoryConfig    `toml:"memory"`
+}
+
+// RetentionConfig governs shrinking the database beyond the tier expiry: one
+// sweep that clears large already-processed blobs, plus VACUUM to reclaim space.
+type RetentionConfig struct {
+	// TrimRaw enables the sweep. It nulls scrape raw_html/clean_html and deletes
+	// search SERP HTML for rows older than RawMaxAge, except the newest
+	// RawKeepLast of each kind (kept for debugging).
+	TrimRaw     bool     `toml:"trim_raw"`
+	RawMaxAge   Duration `toml:"raw_max_age"`
+	RawKeepLast int      `toml:"raw_keep_last"`
+	// VacuumOnStartup runs VACUUM once at boot, before workers start.
+	VacuumOnStartup bool `toml:"vacuum_on_startup"`
+	// VacuumAt is an optional daily "HH:MM" (local) to also VACUUM mid-run;
+	// empty disables it. VACUUM holds an exclusive lock for its duration.
+	VacuumAt string `toml:"vacuum_at"`
+}
+
+// JobsConfig tunes the background job runner.
+type JobsConfig struct {
+	// StaleAfter is how long a claimed job may run before the reaper assumes the
+	// worker died and requeues it. It MUST exceed the longest a job can
+	// legitimately take — for distill that is one LLM call bounded by
+	// llm.timeout — otherwise long jobs get reaped mid-flight and run again,
+	// doubling the work. Trade-off: a genuinely crashed job takes this long to
+	// be recovered.
+	StaleAfter Duration `toml:"stale_after"`
 }
 
 type DatabaseConfig struct {
@@ -49,6 +78,11 @@ type DatabaseConfig struct {
 	// the conservative choice while the Turso bindings are beta. Raise it to
 	// let Turso's concurrency actually do something.
 	MaxOpenConns int `toml:"max_open_conns"`
+	// AutoVacuum sets PRAGMA auto_vacuum, and only takes effect on a FRESH
+	// database — SQLite/Turso cannot flip it on a non-empty file. "full"
+	// reclaims freed pages continuously; "none" relies solely on explicit
+	// VACUUM. Applied best-effort (a driver that lacks it is ignored).
+	AutoVacuum string `toml:"auto_vacuum"`
 }
 
 type BrowserConfig struct {
@@ -61,14 +95,17 @@ type BrowserConfig struct {
 }
 
 type SearchConfig struct {
-	TermsFile    string         `toml:"terms_file"`
-	Engines      []string       `toml:"engines"`
-	Typed        []string       `toml:"typed"`
+	TermsFile string   `toml:"terms_file"`
+	Engines   []string `toml:"engines"`
+	Typed     []string `toml:"typed"`
+	// ExcludeHosts drops result URLs on these registrable domains across every
+	// engine, on top of each engine's built-in skip list. "msn.com" also
+	// matches "www.msn.com". Configure here instead of editing engine.go.
+	ExcludeHosts []string       `toml:"exclude_hosts"`
 	Results      map[string]int `toml:"results"`
 	MinDelay     Duration       `toml:"min_delay"`
 	MaxDelay     Duration       `toml:"max_delay"`
 	QueryTimeout Duration       `toml:"query_timeout"`
-	ArtifactDir  string         `toml:"artifact_dir"`
 	// EngineStagger delays each engine's start relative to the previous one so
 	// the three queries for a term do not leave as one correlated burst.
 	// EngineJitter is added at random on top.
@@ -113,6 +150,14 @@ type ServerConfig struct {
 // provider are configured the same way. Config file only, no CLI flags.
 type LLMConfig struct {
 	Models []LLMModel `toml:"model"`
+	// Timeout bounds every LLM HTTP call. A multimodel llama-server cold-loads a
+	// model into VRAM on first hit, which can exceed a minute, so this must be
+	// generous. 0 falls back to the built-in default.
+	Timeout Duration `toml:"timeout"`
+	// EmbedConcurrency caps how many embedding requests run at once during a
+	// bulk re-embed. The embedding server accepts parallel requests; this lets
+	// the app use them. Values <=1 embed sequentially.
+	EmbedConcurrency int `toml:"embed_concurrency"`
 }
 
 type LLMModel struct {
@@ -121,6 +166,10 @@ type LLMModel struct {
 	Endpoint string `toml:"endpoint"` // OpenAI-compatible base URL
 	Model    string `toml:"model"`    // model id sent in the request body
 	APIKey   string `toml:"api_key"`  // optional bearer token
+	// APIPath is the OpenAI route prefix prepended to /chat/completions and
+	// /embeddings. A nil value (key absent) defaults to "/v1"; set it to "" for
+	// a multimodel llama-server that serves those routes at the root.
+	APIPath *string `toml:"api_path"`
 	// Dim is the embedding dimension for an "embed" model. It is stamped onto
 	// every vector row so a model/dim change can be detected and migrated.
 	Dim int `toml:"dim"`
@@ -129,6 +178,17 @@ type LLMModel struct {
 	// wants an instruction on the query and none on the document.
 	QueryPrefix string `toml:"query_prefix"`
 	DocPrefix   string `toml:"doc_prefix"`
+	// NoThink appends Qwen's "/no_think" soft switch to the chat prompt to
+	// disable the model's thinking, independent of build-specific request
+	// fields. Only applied to the chat role.
+	NoThink bool `toml:"no_think"`
+	// MaxTokens caps chat output when > 0; 0 (default) omits the field and lets
+	// the server decide. Only applied to the chat role.
+	MaxTokens int `toml:"max_tokens"`
+	// ExtraBody is merged verbatim into the chat request JSON, for server- or
+	// model-specific knobs the fixed fields don't cover — e.g. disabling a
+	// thinking model or setting a reasoning budget. Only applied to the chat role.
+	ExtraBody map[string]any `toml:"extra_body"`
 }
 
 // TierConfig drives the shared sliding-expiry / promotion behaviour across the
@@ -158,6 +218,7 @@ func defaultConfig() Config {
 			MainDB:       "go-web-search.db",
 			LogDB:        "go-web-search-logs.db",
 			MaxOpenConns: 4,
+			AutoVacuum:   "full",
 		},
 		Browser: BrowserConfig{
 			Headless:    false,
@@ -174,7 +235,6 @@ func defaultConfig() Config {
 			MinDelay:      Duration{4 * time.Second},
 			MaxDelay:      Duration{11 * time.Second},
 			QueryTimeout:  Duration{90 * time.Second},
-			ArtifactDir:   "runs",
 			EngineStagger: Duration{1500 * time.Millisecond},
 			EngineJitter:  Duration{1200 * time.Millisecond},
 		},
@@ -200,6 +260,8 @@ func defaultConfig() Config {
 			WriteTimeout: Duration{180 * time.Second},
 		},
 		LLM: LLMConfig{
+			Timeout:          Duration{120 * time.Second},
+			EmbedConcurrency: 4,
 			Models: []LLMModel{
 				{
 					Name:     "chat",
@@ -216,6 +278,15 @@ func defaultConfig() Config {
 					QueryPrefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
 				},
 			},
+		},
+		Jobs: JobsConfig{
+			StaleAfter: Duration{30 * time.Minute},
+		},
+		Retention: RetentionConfig{
+			TrimRaw:         true,
+			RawMaxAge:       Duration{48 * time.Hour},
+			RawKeepLast:     10,
+			VacuumOnStartup: true,
 		},
 		Cache: TierConfig{
 			ShortTTL:         Duration{10 * 24 * time.Hour},

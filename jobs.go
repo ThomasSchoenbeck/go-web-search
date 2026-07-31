@@ -32,12 +32,15 @@ type JobRunner struct {
 	recurring []recurringJob
 }
 
-func newJobRunner(store *Store, logger *log.Logger, workers int, poll time.Duration) *JobRunner {
+func newJobRunner(store *Store, logger *log.Logger, workers int, poll, staleAfter time.Duration) *JobRunner {
 	if workers < 1 {
 		workers = 1
 	}
 	if poll <= 0 {
 		poll = time.Second
+	}
+	if staleAfter <= 0 {
+		staleAfter = 30 * time.Minute
 	}
 	return &JobRunner{
 		store:       store,
@@ -45,7 +48,7 @@ func newJobRunner(store *Store, logger *log.Logger, workers int, poll time.Durat
 		workers:     workers,
 		poll:        poll,
 		maxAttempts: 5,
-		staleAfter:  5 * time.Minute,
+		staleAfter:  staleAfter,
 		handlers:    make(map[string]JobHandler),
 	}
 }
@@ -126,10 +129,13 @@ func (r *JobRunner) run(ctx context.Context, j Job) {
 		r.store.FailJob(ctx, j.ID)
 		return
 	}
+	r.log.Printf("job %s (%s): start", j.ID, j.Type)
+	start := time.Now()
 	if err := h(ctx, j.Payload); err == nil {
 		if err := r.store.CompleteJob(ctx, j.ID); err != nil {
 			r.log.Printf("job %s: complete: %v", j.ID, err)
 		}
+		r.log.Printf("job %s (%s): done in %s", j.ID, j.Type, time.Since(start).Round(time.Millisecond))
 		return
 	} else {
 		attempts := j.Attempts + 1

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 const jobTypeEmbed = "embed"
@@ -34,7 +35,7 @@ func enqueueEmbed(ctx context.Context, store *Store, kind, id, text string) erro
 // into the active vector table. If a migration is in flight the active table is
 // still the previous generation; the re-embed pass separately populates the new
 // one, so writing here to the current active table is correct.
-func embedHandler(store *Store, llm *LLMClient) JobHandler {
+func embedHandler(store *Store, llm *LLMClient, logger *log.Logger) JobHandler {
 	return func(ctx context.Context, payload string) error {
 		var p embedPayload
 		if err := json.Unmarshal([]byte(payload), &p); err != nil {
@@ -47,7 +48,8 @@ func embedHandler(store *Store, llm *LLMClient) JobHandler {
 		if table == "" {
 			return fmt.Errorf("embed: no active vector table yet")
 		}
-		vecs, err := llm.Embed(ctx, []string{p.Text}, false)
+		logger.Printf("     embed: creating vector for %s %s (%d chars) in %s", p.Kind, p.ID, len(p.Text), table)
+		vecs, err := llm.Embed(ctx, []string{p.Text}, false, "store "+p.Kind)
 		if err != nil {
 			return err
 		}

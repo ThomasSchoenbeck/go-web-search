@@ -29,7 +29,7 @@ func (s *Store) StoreFact(ctx context.Context, cfg TierConfig, mem MemoryConfig,
 	if err != nil {
 		return "", err
 	}
-	vecs, err := llm.Embed(ctx, []string{text}, false)
+	vecs, err := llm.Embed(ctx, []string{text}, false, "memory fact")
 	if err != nil {
 		return "", err
 	}
@@ -130,6 +130,60 @@ func (s *Store) scanFact(ctx context.Context, id string) (*MemoryFact, bool, err
 	f.Volatility = vol.String
 	f.ExpiresAt = exp.String
 	return &f, true, nil
+}
+
+// FactSummary is a stored fact for the browse/stats endpoints (no vector).
+type FactSummary struct {
+	ID         string `json:"id"`
+	Text       string `json:"text"`
+	TextChars  int    `json:"text_chars"`
+	SourceURL  string `json:"source_url,omitempty"`
+	Volatility string `json:"volatility,omitempty"`
+	Tier       string `json:"tier,omitempty"`
+	HitCount   int    `json:"hit_count"`
+	CreatedAt  string `json:"created_at,omitempty"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
+}
+
+// ListFacts returns stored facts newest-first, optionally filtered by a text
+// substring. limit is clamped to [1,500]; 0 uses the default of 50.
+func (s *Store) ListFacts(ctx context.Context, q string, limit, offset int) ([]FactSummary, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query := `SELECT id, text, source_url, volatility, tier, hit_count, created_at, expires_at
+	            FROM memory_facts`
+	var args []any
+	if q != "" {
+		query += ` WHERE text LIKE ?`
+		args = append(args, "%"+q+"%")
+	}
+	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []FactSummary
+	for rows.Next() {
+		var f FactSummary
+		var src, vol, exp sql.NullString
+		if err := rows.Scan(&f.ID, &f.Text, &src, &vol, &f.Tier, &f.HitCount, &f.CreatedAt, &exp); err != nil {
+			return nil, err
+		}
+		f.TextChars = len(f.Text)
+		f.SourceURL = src.String
+		f.Volatility = vol.String
+		f.ExpiresAt = exp.String
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // touchMemoryFact records a hit: bump hit_count and slide the expiry window.

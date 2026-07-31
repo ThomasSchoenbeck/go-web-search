@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const jobTypeReembed = "reembed"
@@ -83,7 +84,7 @@ func bootVectors(ctx context.Context, store *Store, llm *LLMClient, logger *log.
 
 // reembedHandler re-embeds every owner row into the new generation table, then
 // flips the active table, clears the migration marker and drops the old table.
-func reembedHandler(store *Store, llm *LLMClient) JobHandler {
+func reembedHandler(store *Store, llm *LLMClient, concurrency int) JobHandler {
 	return func(ctx context.Context, payload string) error {
 		var p reembedPayload
 		if err := json.Unmarshal([]byte(payload), &p); err != nil {
@@ -92,10 +93,10 @@ func reembedHandler(store *Store, llm *LLMClient) JobHandler {
 		if err := store.ensureVectorTable(ctx, p.NewTable, p.Dim); err != nil {
 			return err
 		}
-		if err := reembedOwner(ctx, store, llm, p.NewTable, ownerMemory, `SELECT id, text FROM memory_facts`); err != nil {
+		if err := reembedOwner(ctx, store, llm, p.NewTable, ownerMemory, `SELECT id, text FROM memory_facts`, concurrency); err != nil {
 			return err
 		}
-		if err := reembedOwner(ctx, store, llm, p.NewTable, ownerSearch, `SELECT id, query FROM search_cache`); err != nil {
+		if err := reembedOwner(ctx, store, llm, p.NewTable, ownerSearch, `SELECT id, query FROM search_cache`, concurrency); err != nil {
 			return err
 		}
 		if err := setVectorMeta(ctx, store, p.NewTable, p.Model, p.Dim); err != nil {
@@ -111,8 +112,10 @@ func reembedHandler(store *Store, llm *LLMClient) JobHandler {
 }
 
 // reembedOwner embeds every row returned by query (id, text) into newTable. A
-// missing owner table is treated as "no rows yet".
-func reembedOwner(ctx context.Context, store *Store, llm *LLMClient, newTable, ownerKind, query string) error {
+// missing owner table is treated as "no rows yet". Rows are embedded through a
+// bounded pool of `concurrency` goroutines so the embedding server's parallel
+// slots are actually used; the first error stops the pass and is returned.
+func reembedOwner(ctx context.Context, store *Store, llm *LLMClient, newTable, ownerKind, query string, concurrency int) error {
 	rows, err := store.db.QueryContext(ctx, query)
 	if err != nil {
 		if isNoSuchTable(err) {
@@ -135,19 +138,52 @@ func reembedOwner(ctx context.Context, store *Store, llm *LLMClient, newTable, o
 		return err
 	}
 
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	// Cancelling on the first failure lets in-flight goroutines exit early and
+	// stops the loop from launching more work.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	fail := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		mu.Unlock()
+	}
+
 	for _, it := range items {
 		if strings.TrimSpace(it.text) == "" {
 			continue
 		}
-		vecs, err := llm.Embed(ctx, []string{it.text}, false)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			break
 		}
-		if err := store.UpsertVector(ctx, newTable, ownerKind, it.id, vecs[0], llm.EmbedModelName(), llm.EmbedDim()); err != nil {
-			return err
-		}
+		sem <- struct{}{} // blocks once `concurrency` are in flight: take turns
+		wg.Add(1)
+		go func(it item) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			vecs, err := llm.Embed(ctx, []string{it.text}, false, "reembed "+ownerKind)
+			if err != nil {
+				fail(err)
+				return
+			}
+			if err := store.UpsertVector(ctx, newTable, ownerKind, it.id, vecs[0], llm.EmbedModelName(), llm.EmbedDim()); err != nil {
+				fail(err)
+			}
+		}(it)
 	}
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 // setVectorMeta records the active table, model and dim, and clears the

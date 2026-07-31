@@ -33,7 +33,6 @@ func realMain() error {
 	dataDir := flag.String("data", "", "override database.data_dir")
 	userData := flag.String("userdata", "", "override browser.user_data_dir")
 	profile := flag.String("profile", "", "override browser.profile")
-	outDir := flag.String("out", "", "override search.artifact_dir")
 	startURL := flag.String("start", "", "override browser.start_url")
 	headless := flag.Bool("headless", false, "override browser.headless")
 	fixUA := flag.Bool("fix-ua", true, "override browser.fix_ua")
@@ -80,8 +79,6 @@ func realMain() error {
 			cfg.Browser.UserDataDir = *userData
 		case "profile":
 			cfg.Browser.Profile = *profile
-		case "out":
-			cfg.Search.ArtifactDir = *outDir
 		case "start":
 			cfg.Browser.StartURL = *startURL
 		case "headless":
@@ -127,7 +124,7 @@ func realMain() error {
 		defer lock.release()
 	}
 
-	store, err := openStore(cfg.Database.Driver, filepath.Join(dataPath, cfg.Database.MainDB), cfg.Database.MaxOpenConns)
+	store, err := openStore(cfg.Database.Driver, filepath.Join(dataPath, cfg.Database.MainDB), cfg.Database.MaxOpenConns, cfg.Database.AutoVacuum)
 	if err != nil {
 		return err
 	}
@@ -146,14 +143,14 @@ func realMain() error {
 		}
 	}()
 
-	art, err := newArtifacts(cfg.Search.ArtifactDir, logWriter)
+	art, err := newArtifacts(logWriter)
 	if err != nil {
 		return err
 	}
 	defer art.Close()
 
 	ctx := context.Background()
-	runID, err := store.StartRun(ctx, *mode, art.Dir)
+	runID, err := store.StartRun(ctx, *mode, "")
 	if err != nil {
 		return err
 	}
@@ -180,7 +177,6 @@ func realMain() error {
 	defer stopCancel()
 
 	art.Log.Printf("run id        : %s", runID)
-	art.Log.Printf("run directory : %s", art.Dir)
 	art.Log.Printf("database      : %s", filepath.Join(dataPath, cfg.Database.MainDB))
 	art.Log.Printf("mode          : %s", *mode)
 	art.Log.Printf("profile       : %s", profilePath)

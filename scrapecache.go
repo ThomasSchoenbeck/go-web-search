@@ -219,6 +219,45 @@ func (s *Store) GetScrape(ctx context.Context, scrapeID string, includeRaw bool)
 	return &d, nil
 }
 
+// ScrapeSizes reports a cached scrape's identity and body sizes without pulling
+// the (potentially large) bodies themselves — enough to trace a fact to its
+// source page and see how bloated the raw material is (raw vs cleaned vs text).
+type ScrapeSizes struct {
+	ScrapeID    string `json:"scrape_id"`
+	URL         string `json:"url"`
+	Title       string `json:"title,omitempty"`
+	HTTPStatus  int    `json:"http_status,omitempty"`
+	FetchedWith string `json:"fetched_with,omitempty"`
+	TextChars   int    `json:"text_chars"`
+	CleanChars  int    `json:"clean_html_chars"`
+	RawChars    int    `json:"raw_html_chars"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// ScrapeSizesByURL resolves a fact's source_url to its cached scrape's sizes.
+// found is false when that page is no longer cached (e.g. expired).
+func (s *Store) ScrapeSizesByURL(ctx context.Context, rawURL string) (*ScrapeSizes, bool, error) {
+	var z ScrapeSizes
+	var status sql.NullInt64
+	var title, fw sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, url, title, http_status, fetched_with,
+		        COALESCE(length(text_content), 0), COALESCE(length(clean_html), 0),
+		        COALESCE(length(raw_html), 0), created_at
+		   FROM scrape_cache WHERE url = ?`, rawURL).
+		Scan(&z.ScrapeID, &z.URL, &title, &status, &fw, &z.TextChars, &z.CleanChars, &z.RawChars, &z.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	z.Title = title.String
+	z.HTTPStatus = int(status.Int64)
+	z.FetchedWith = fw.String
+	return &z, true, nil
+}
+
 // RunScrapeIDs lists the scrape ids attributed to a run.
 func (s *Store) RunScrapeIDs(ctx context.Context, runID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
