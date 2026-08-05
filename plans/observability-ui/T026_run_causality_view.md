@@ -55,7 +55,7 @@ runs or unavailable vectors.
 ## Files to Touch
 
 - `web/src/views/RunCausality.svelte` [NEW]
-- `web/src/lib/graph.js` [NEW]
+- `web/src/lib/graph.ts` [NEW]
 - `web/src/App.svelte`
 
 ## Dependencies

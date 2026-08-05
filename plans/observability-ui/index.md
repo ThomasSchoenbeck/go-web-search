@@ -19,14 +19,19 @@ binary, single service, no separate deployable.
 
 ## Decisions (finalized — interview complete)
 
-- **Frontend:** Svelte 5 + Vite (client-only SPA, not SvelteKit) → Vite `dist/` →
-  `go:embed` into the binary, served on the existing serve listener alongside
-  REST + MCP. The SPA consumes JSON.
+- **Frontend:** Svelte 5 + Vite (client-only SPA, not SvelteKit), **written in
+  TypeScript** → Vite `dist/` → `go:embed` into the binary, served on the existing
+  serve listener alongside REST + MCP. The SPA consumes JSON.
+- **Language — TypeScript throughout.** All frontend code is TypeScript: `.ts`
+  modules and Svelte components with `<script lang="ts">`, a `tsconfig`, and
+  `svelte-check`/`tsc --noEmit` type-checking wired into the build and CI. Test
+  files are `.test.ts` / `.spec.ts`. No plain-JS source.
 - **Tooling & supply chain:** package manager is **pnpm** (not npm). Pinned latest
-  at planning time — `create-vite` 9.1.2, `vite` 8.2.0, `svelte` 5.56.8 — with
-  **every dependency pinned to an exact version**, a committed `pnpm-lock.yaml`,
-  and pinned pnpm + Node. `pnpm audit` must pass and versions must be checked for
-  CVEs / supply-chain issues before pinning (re-confirm at implementation time).
+  at planning time — `create-vite` 9.1.2, `vite` 8.2.0, `svelte` 5.56.8, plus
+  pinned `typescript` and `svelte-check` — with **every dependency pinned to an
+  exact version**, a committed `pnpm-lock.yaml`, and pinned pnpm + Node. `pnpm
+  audit` must pass and versions must be checked for CVEs / supply-chain issues
+  before pinning (re-confirm at implementation time).
 - **Read-only v1.** Inspection only; no action-triggering, no destructive ops.
   Existing write endpoints (`/api/distill/preview`, `/api/vacuum`, etc.) are out
   of scope for the UI.
@@ -61,10 +66,10 @@ The shared harness is set up once in **T024** (Vitest + Playwright + isolated-DB
 fixtures); every view and endpoint task then ships its own tests.
 
 - **Frontend unit (Vitest):** every non-trivial function or component behavior
-  gets a unit test. Files colocated as `*.test.js`. `pnpm test`.
+  gets a unit test. Files colocated as `*.test.ts`. `pnpm test`.
 - **End-to-end (Playwright):** every page is loaded and **every interactive
   element — every button, link, and input — is exercised.** Specs live in
-  `web/tests/e2e/*.spec.js`. `pnpm test:e2e`.
+  `web/tests/e2e/*.spec.ts`. `pnpm test:e2e`.
 - **Backend (Go):** each new endpoint keeps its `go test` coverage.
 - **Isolated databases + full teardown (hard rule):** all tests — frontend e2e
   and backend Go — run against a **throwaway database created per run** (temp
@@ -325,3 +330,8 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
    new counters — T020 resolves rate-vs-count while staying read-only.
 10. **Routing & build — CONFIRMED.** History-API clean URLs + Go SPA fallback (no
     hash routing); `Taskfile.yaml` gets targets chaining `pnpm build` → `go build`.
+11. **TypeScript — CONFIRMED.** The whole frontend is TypeScript: `.ts` modules,
+    Svelte components with `<script lang="ts">`, `.test.ts`/`.spec.ts` tests, a
+    `tsconfig`, pinned `typescript` + `svelte-check`, and type-checking in the
+    build/CI. T002 scaffolds with the Svelte-TS template; all view/lib/test tasks
+    are TypeScript.

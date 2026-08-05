@@ -20,18 +20,20 @@ setup. All tooling is pinned to exact versions and passes the same `pnpm audit`
 per-feature tests themselves live in their own tasks (each view and endpoint
 task lists its unit/e2e tests in its How-to-Verify).
 
-Two layers:
+All harness code and tests are **TypeScript** (`.ts` configs and specs), pinned to
+exact versions and passing the audit gate. Two layers:
 
-- **Unit (Vitest).** Add Vitest with the Svelte testing library so component and
-  module logic can be unit-tested. Provide a `pnpm test` script. Unit test files
-  are colocated with the code as `*.test.js` (e.g. `web/src/lib/api.test.js`,
-  `web/src/views/RunsList.test.js`). The standard is: every non-trivial function
-  or component behavior gets a unit test.
-- **End-to-end (Playwright).** Add Playwright with a config that boots the app
-  and drives real pages. E2E specs live under `web/tests/e2e/*.spec.js`. Provide
-  a `pnpm test:e2e` script. The standard the plan holds every page to: each page
-  is loaded and **every interactive element — every button, link, and input — is
-  exercised** at least once.
+- **Unit (Vitest).** Add Vitest (TypeScript config, `vitest.config.ts`) with the
+  Svelte testing library so component and module logic can be unit-tested. Provide
+  a `pnpm test` script. Unit test files are colocated with the code as `*.test.ts`
+  (e.g. `web/src/lib/api.test.ts`, `web/src/views/RunsList.test.ts`). The standard
+  is: every non-trivial function or component behavior gets a unit test. Type-
+  checking (`svelte-check`/`tsc`, from T002's `check` script) covers the tests too.
+- **End-to-end (Playwright).** Add Playwright (`playwright.config.ts`) with a
+  config that boots the app and drives real pages. E2E specs live under
+  `web/tests/e2e/*.spec.ts`. Provide a `pnpm test:e2e` script. The standard the
+  plan holds every page to: each page is loaded and **every interactive element —
+  every button, link, and input — is exercised** at least once.
 
 **Isolated databases and full teardown (hard requirement).** Tests must never
 touch a developer's or production data. The harness must:
@@ -79,11 +81,11 @@ own specs.
 ## Files to Touch
 
 - `web/package.json`
-- `web/vitest.config.js` [NEW]
-- `web/playwright.config.js` [NEW]
-- `web/tests/e2e/fixtures.js` [NEW]
-- `web/tests/e2e/smoke.spec.js` [NEW]
-- `web/src/lib/example.test.js` [NEW]
+- `web/vitest.config.ts` [NEW]
+- `web/playwright.config.ts` [NEW]
+- `web/tests/e2e/fixtures.ts` [NEW]
+- `web/tests/e2e/smoke.spec.ts` [NEW]
+- `web/src/lib/example.test.ts` [NEW]
 - `testsupport.go` [NEW]
 
 ## Dependencies

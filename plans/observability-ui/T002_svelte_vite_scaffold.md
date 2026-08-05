@@ -14,10 +14,18 @@ blocker_note:
 ## Description
 
 Create the frontend project under a new `web/` directory using **Svelte 5 + Vite
-as a client-only SPA** (not SvelteKit — the lightest single-page setup, no SSR,
-no server adapter). The package manager is **pnpm, not npm** — every script,
-lockfile, and doc reference in this plan uses pnpm. Scaffold with the pinned
-`create-vite` scaffolder and its `svelte` (non-kit) template.
+as a client-only SPA in TypeScript** (not SvelteKit — the lightest single-page
+setup, no SSR, no server adapter). The package manager is **pnpm, not npm** —
+every script, lockfile, and doc reference in this plan uses pnpm. Scaffold with
+the pinned `create-vite` scaffolder and its **`svelte-ts`** (Svelte + TypeScript,
+non-kit) template.
+
+**TypeScript throughout.** The whole frontend is TypeScript — `.ts` modules and
+Svelte components with `<script lang="ts">`. Include a `tsconfig.json` (plus the
+`tsconfig.node.json` the template emits) and a `svelte.config.js` using
+`vitePreprocess`, add `svelte-check` and `typescript` as pinned dev deps, and add
+a `check` script (`svelte-check --tsconfig ./tsconfig.json`) so type errors fail
+the build/CI. No plain-JS source files.
 
 **Pinned tooling (exact versions — pin, do not float).** These are the current
 latest at planning time; re-confirm each against its registry at implementation
@@ -29,6 +37,9 @@ shipped:
 - `svelte` **5.56.8**
 - `@sveltejs/vite-plugin-svelte` — pin to the exact latest release compatible
   with Vite 8 + Svelte 5 (resolve the version at implementation time).
+- `typescript` and `svelte-check` — pin the exact latest compatible releases
+  (resolve at implementation time); plus the template's TS types (e.g.
+  `@tsconfig/svelte` / `tslib` as the `svelte-ts` template requires).
 - pnpm itself — pin via the `packageManager` field in `package.json`
   (e.g. `"packageManager": "pnpm@<exact>"`) so the toolchain is reproducible.
 - Node — pin the runtime via `.nvmrc` and an `engines.node` range in
@@ -67,18 +78,23 @@ individual views land in later tasks.
 
 ## Goal
 
-A `web/` Svelte 5 + Vite client-only SPA scaffold exists, managed with pnpm: all
-dependencies pinned to exact versions with a committed `pnpm-lock.yaml`, the
-toolchain (pnpm + Node) pinned, `pnpm audit` clean (or every advisory justified),
-and a supply-chain review done. It runs under the Vite dev server with an API/MCP
-proxy to the serve listener, builds to `web/dist/` with `pnpm build`, and
-gitignores `dist/` and `node_modules/`.
+A `web/` Svelte 5 + Vite client-only **TypeScript** SPA scaffold exists, managed
+with pnpm: all dependencies pinned to exact versions with a committed
+`pnpm-lock.yaml`, the toolchain (pnpm + Node) pinned, `pnpm audit` clean (or every
+advisory justified), a supply-chain review done, and `svelte-check`/`tsc` type-
+checking passing. It runs under the Vite dev server with an API/MCP proxy to the
+serve listener, builds to `web/dist/` with `pnpm build`, and gitignores `dist/`
+and `node_modules/`.
 
 ## How to Verify
 
-- `web/package.json` declares Svelte 5 + Vite (no SvelteKit dependency), pins
-  every dependency to an **exact** version (no `^`/`~`), sets `packageManager`
-  to a pinned pnpm and `engines.node`, and defines `dev`/`build` scripts.
+- `web/package.json` declares Svelte 5 + Vite + TypeScript (no SvelteKit
+  dependency), pins every dependency to an **exact** version (no `^`/`~`), sets
+  `packageManager` to a pinned pnpm and `engines.node`, and defines `dev`/`build`/
+  `check` scripts.
+- The project is TypeScript: `tsconfig.json` exists, `src/main.ts` and
+  `App.svelte` (`<script lang="ts">`) type-check, and `pnpm check`
+  (`svelte-check`/`tsc --noEmit`) passes with no errors.
 - `web/.npmrc` sets `save-exact=true`; `web/pnpm-lock.yaml` exists and is
   committed; `pnpm install --frozen-lockfile` succeeds with no lockfile drift.
 - `pnpm audit` reports no unresolved advisories (or each remaining one is
@@ -100,10 +116,14 @@ gitignores `dist/` and `node_modules/`.
 - `web/pnpm-lock.yaml` [NEW]
 - `web/.npmrc` [NEW]
 - `web/.nvmrc` [NEW]
-- `web/vite.config.js` [NEW]
+- `web/vite.config.ts` [NEW]
+- `web/tsconfig.json` [NEW]
+- `web/tsconfig.node.json` [NEW]
+- `web/svelte.config.js` [NEW]
 - `web/index.html` [NEW]
-- `web/src/main.js` [NEW]
+- `web/src/main.ts` [NEW]
 - `web/src/App.svelte` [NEW]
+- `web/src/vite-env.d.ts` [NEW]
 - `web/.gitignore` [NEW]
 
 ## Dependencies

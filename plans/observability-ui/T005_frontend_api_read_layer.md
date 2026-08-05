@@ -14,7 +14,9 @@ blocker_note:
 ## Description
 
 Build the single shared read layer every view uses to talk to the backend, so no
-view hand-rolls fetch or polling. It lives under `web/src/lib/` and provides:
+view hand-rolls fetch or polling. It lives under `web/src/lib/` and is written in
+**TypeScript** — declare interfaces/types for the endpoint response shapes it
+returns so views consume typed data. It provides:
 
 - A typed fetch client that resolves the API base from the SPA's own origin (no
   hardcoded host/port — the SPA is served from the same listener) and issues GET
@@ -65,10 +67,10 @@ endpoint.
 
 ## Files to Touch
 
-- `web/src/lib/api.js` [NEW]
-- `web/src/lib/poll.js` [NEW]
-- `web/src/lib/request.js` [NEW]
-- `web/src/lib/uiconfig.js` [NEW]
+- `web/src/lib/api.ts` [NEW]
+- `web/src/lib/poll.ts` [NEW]
+- `web/src/lib/request.ts` [NEW]
+- `web/src/lib/uiconfig.ts` [NEW]
 
 ## Dependencies
 

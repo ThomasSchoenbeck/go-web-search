@@ -15,7 +15,7 @@ blocker_note:
 
 Build the embeddings scatter view over the T021 vector dump. Per the confirmed
 decision, **the 2-D layout is computed in the browser using PCA** — the view
-fetches the bounded raw vectors from T021 and runs a PCA reduction to 2-D in JS
+fetches the bounded raw vectors from T021 and runs a PCA reduction to 2-D in TypeScript
 (PCA is simple linear algebra: a small local helper or a minimal, pinned + audited
 client-side library — NOT a Go dependency, and not UMAP/t-SNE), then renders the
 result as a scatter plot. PCA is fast and deterministic, so the same vectors
@@ -56,7 +56,7 @@ unavailable.
 ## Files to Touch
 
 - `web/src/views/ProjectionScatter.svelte` [NEW]
-- `web/src/lib/projection.js` [NEW]
+- `web/src/lib/projection.ts` [NEW]
 - `web/package.json`
 - `web/src/App.svelte`
 
