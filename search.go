@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
@@ -48,9 +47,12 @@ func (s *session) searchByBox(parent context.Context, e engineDef, term string, 
 	if err := chromedp.Run(ctx,
 		chromedp.MouseClickNode(node),
 		pause(200*time.Millisecond, 600*time.Millisecond),
-		// Input.insertText delivers the whole string at once, like a paste,
-		// rather than synthesising a keystroke per character.
-		chromedp.ActionFunc(func(ctx context.Context) error { return input.InsertText(term).Do(ctx) }),
+		// Type character by character so the engine's box fires the
+		// keydown/keypress/input events its JavaScript listens for. A single
+		// Input.insertText (paste-style) leaves that state un-updated on modern
+		// JS-controlled boxes, so the later Enter submits nothing. This is what a
+		// human does by hand in browse mode, where Enter works.
+		chromedp.KeyEvent(term),
 		// Let the suggestion dropdown settle before Enter, otherwise it can
 		// swallow the key and submit a suggestion instead of the term.
 		pause(500*time.Millisecond, 1200*time.Millisecond),

@@ -25,8 +25,7 @@ func main() {
 
 func realMain() error {
 	configPath := flag.String("config", "config.toml", "TOML config file")
-	mode := flag.String("mode", "search", "search: run the term list; browse: drive the browser yourself; serve: REST + MCP server")
-	doScrape := flag.Bool("scrape", false, "after searching, scrape the URLs that were found")
+	mode := flag.String("mode", "serve", "browse: drive the browser yourself; serve: REST + MCP server")
 	termsPath := flag.String("terms", "", "override search.terms_file")
 	enginesCSV := flag.String("engines", "", "override search.engines")
 	typedCSV := flag.String("typed", "", "override search.typed (none to disable)")
@@ -34,7 +33,6 @@ func realMain() error {
 	dataDir := flag.String("data", "", "override database.data_dir")
 	userData := flag.String("userdata", "", "override browser.user_data_dir")
 	profile := flag.String("profile", "", "override browser.profile")
-	outDir := flag.String("out", "", "override search.artifact_dir")
 	startURL := flag.String("start", "", "override browser.start_url")
 	headless := flag.Bool("headless", false, "override browser.headless")
 	fixUA := flag.Bool("fix-ua", true, "override browser.fix_ua")
@@ -81,8 +79,6 @@ func realMain() error {
 			cfg.Browser.UserDataDir = *userData
 		case "profile":
 			cfg.Browser.Profile = *profile
-		case "out":
-			cfg.Search.ArtifactDir = *outDir
 		case "start":
 			cfg.Browser.StartURL = *startURL
 		case "headless":
@@ -128,7 +124,7 @@ func realMain() error {
 		defer lock.release()
 	}
 
-	store, err := openStore(cfg.Database.Driver, filepath.Join(dataPath, cfg.Database.MainDB), cfg.Database.MaxOpenConns)
+	store, err := openStore(cfg.Database.Driver, filepath.Join(dataPath, cfg.Database.MainDB), cfg.Database.MaxOpenConns, cfg.Database.AutoVacuum)
 	if err != nil {
 		return err
 	}
@@ -147,14 +143,14 @@ func realMain() error {
 		}
 	}()
 
-	art, err := newArtifacts(cfg.Search.ArtifactDir, logWriter)
+	art, err := newArtifacts(logWriter)
 	if err != nil {
 		return err
 	}
 	defer art.Close()
 
 	ctx := context.Background()
-	runID, err := store.StartRun(ctx, *mode, art.Dir)
+	runID, err := store.StartRun(ctx, *mode, "")
 	if err != nil {
 		return err
 	}
@@ -181,7 +177,6 @@ func realMain() error {
 	defer stopCancel()
 
 	art.Log.Printf("run id        : %s", runID)
-	art.Log.Printf("run directory : %s", art.Dir)
 	art.Log.Printf("database      : %s", filepath.Join(dataPath, cfg.Database.MainDB))
 	art.Log.Printf("mode          : %s", *mode)
 	art.Log.Printf("profile       : %s", profilePath)
@@ -191,12 +186,10 @@ func realMain() error {
 	switch *mode {
 	case "browse":
 		runErr = browseMode(cfg, art, userDataDir, stop)
-	case "search":
-		runErr = searchMode(cfg, art, store, runID, userDataDir, *doScrape, stop)
 	case "serve":
 		runErr = serveWithBrowser(cfg, art, store, userDataDir, stop)
 	default:
-		runErr = fmt.Errorf("unknown -mode %q (want search, browse or serve)", *mode)
+		runErr = fmt.Errorf("unknown -mode %q (want browse or serve)", *mode)
 	}
 
 	if err := store.FinishRun(ctx, runID); err != nil {
@@ -259,70 +252,6 @@ func browseMode(cfg Config, art *artifacts, userDataDir string, stop context.Con
 	return nil
 }
 
-func searchMode(cfg Config, art *artifacts, store *Store, runID, userDataDir string, doScrape bool, stop context.Context) error {
-	terms, err := readTerms(cfg.Search.TermsFile)
-	if err != nil {
-		return err
-	}
-
-	s, err := launch(context.Background(), sessionOpts{
-		headless:    cfg.Browser.Headless,
-		noSandbox:   cfg.Browser.NoSandbox,
-		userDataDir: userDataDir,
-		profileName: cfg.Browser.Profile,
-		normalizeUA: cfg.Browser.FixUA,
-		log:         art.Log,
-	})
-	if err != nil {
-		return err
-	}
-	defer s.close()
-
-	h := newHarvester(cfg, store, art.Log, s)
-	ctx := context.Background()
-
-	art.Log.Printf("harvesting %d terms, engines staggered %s + up to %s jitter",
-		len(terms), cfg.Search.EngineStagger.Duration, cfg.Search.EngineJitter.Duration)
-
-	complete, err := h.SearchTerms(ctx, runID, terms, stop)
-	if err != nil {
-		return err
-	}
-	if !complete {
-		art.Log.Printf("interrupted: results so far are already stored")
-	}
-
-	urls, err := store.RunURLs(ctx, runID)
-	if err != nil {
-		return err
-	}
-	art.Log.Printf("search complete: %d unique URLs", len(urls))
-
-	if doScrape && cfg.Scrape.Enabled && stop.Err() == nil {
-		outcomes, err := h.ScrapeRun(ctx, runID)
-		if err != nil {
-			return err
-		}
-		ok, skipped, failed := 0, 0, 0
-		for _, o := range outcomes {
-			switch {
-			case o.Error != "":
-				failed++
-			case o.Skipped != "":
-				skipped++
-			default:
-				ok++
-			}
-		}
-		art.Log.Printf("scrape complete: %d ok, %d skipped, %d failed", ok, skipped, failed)
-	}
-
-	// The run id is the output: everything else is retrievable by it, either
-	// through the REST endpoints or straight from the database.
-	fmt.Println(runID)
-	return nil
-}
-
 // serveWithBrowser launches Chrome once and serves REST + MCP on top of it.
 func serveWithBrowser(cfg Config, art *artifacts, store *Store, userDataDir string, stop context.Context) error {
 	s, err := launch(context.Background(), sessionOpts{
@@ -339,25 +268,6 @@ func serveWithBrowser(cfg Config, art *artifacts, store *Store, userDataDir stri
 	defer s.close()
 
 	return serveMode(cfg, art, newHarvester(cfg, store, art.Log, s), stop)
-}
-
-func readTerms(path string) ([]string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		out = append(out, line)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("no search terms found in %s", path)
-	}
-	return out, nil
 }
 
 // waitOrStop pauses between queries, returning false if a shutdown signal

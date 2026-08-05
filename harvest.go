@@ -31,7 +31,7 @@ func newHarvester(cfg Config, store *Store, logger *log.Logger, sess *session) *
 		store:   store,
 		log:     logger,
 		session: sess,
-		scraper: newScraper(cfg.Scrape, store, logger, sess),
+		scraper: newScraper(cfg.Scrape, cfg.Cache, store, logger, sess),
 	}
 }
 
@@ -162,7 +162,10 @@ func (h *harvester) queryEngine(ctx context.Context, runID, term string, e engin
 	rec.AnchorCount = len(res.links)
 	rec.RawHTML = res.html
 	rec.Blocked = looksBlocked(res.landedURL, res.html)
-	rec.URLs = destinations(res.links, e.skipLabels, e.skipHosts)
+	// Merge the engine's built-in skip hosts with the operator's global
+	// exclude_hosts list, without mutating the shared engine definition.
+	skipHosts := append(append([]string{}, e.skipHosts...), h.cfg.Search.ExcludeHosts...)
+	rec.URLs = destinations(res.links, e.skipLabels, skipHosts)
 
 	if rec.SearchMode == "typed" {
 		if got := landedQuery(res.landedURL); got != "" && !sameQuery(got, term) {
@@ -187,10 +190,10 @@ func (h *harvester) ScrapeRun(ctx context.Context, runID string) ([]ScrapeOutcom
 	for _, r := range rows {
 		urls = append(urls, r.URL)
 	}
-	return h.scraper.Scrape(ctx, runID, urls), nil
+	return h.scraper.Scrape(ctx, runID, urls, true, 0), nil
 }
 
 // ScrapeURLs scrapes an explicit list.
 func (h *harvester) ScrapeURLs(ctx context.Context, runID string, urls []string) []ScrapeOutcome {
-	return h.scraper.Scrape(ctx, runID, urls)
+	return h.scraper.Scrape(ctx, runID, urls, true, 0)
 }

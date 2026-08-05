@@ -29,7 +29,7 @@ type Store struct {
 	db *sql.DB
 }
 
-func openStore(driver, path string, maxConns int) (*Store, error) {
+func openStore(driver, path string, maxConns int, autoVacuum string) (*Store, error) {
 	db, err := sql.Open(driver, path)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s with driver %q: %w", path, driver, err)
@@ -37,17 +37,41 @@ func openStore(driver, path string, maxConns int) (*Store, error) {
 	if maxConns <= 0 {
 		maxConns = 1
 	}
-	db.SetMaxOpenConns(maxConns)
 
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connecting to %s: %w", path, err)
 	}
+
+	// Pin to one connection so the auto_vacuum PRAGMA and the schema land on the
+	// same connection: auto_vacuum only takes on a fresh, still-empty database,
+	// so it must precede the first CREATE TABLE. Best-effort — a driver that
+	// lacks it, or a non-empty file, just ignores the setting.
+	db.SetMaxOpenConns(1)
+	if mode := normalizeAutoVacuum(autoVacuum); mode != "" {
+		if _, err := db.Exec("PRAGMA auto_vacuum = " + mode); err != nil {
+			_ = err // best-effort
+		}
+	}
 	if _, err := db.Exec(mainSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("applying schema to %s: %w", path, err)
 	}
+	db.SetMaxOpenConns(maxConns)
 	return &Store{db: db}, nil
+}
+
+// normalizeAutoVacuum maps a config value to a safe PRAGMA keyword (never raw
+// user text into SQL). Anything but full/incremental means "leave it alone".
+func normalizeAutoVacuum(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "full":
+		return "FULL"
+	case "incremental":
+		return "INCREMENTAL"
+	default:
+		return ""
+	}
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -223,52 +247,12 @@ type ScrapeRecord struct {
 	Err           string
 	Duration      time.Duration
 	Images        []imageRef
+	ETag          string
+	LastModified  string
 }
 
-// SaveScrape writes a scrape and its images in one transaction, registering the
-// URL if it was never seen by a search.
-func (s *Store) SaveScrape(ctx context.Context, rec ScrapeRecord) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-
-	now := nowRFC3339()
-	urlID, err := upsertURL(ctx, tx, rec.URL, now)
-	if err != nil {
-		return "", err
-	}
-
-	allowed := 0
-	if rec.RobotsAllowed {
-		allowed = 1
-	}
-	scrapeID := newID()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO scrapes (id, url_id, run_id, http_status, content_type, fetched_with,
-		     robots_allowed, title, raw_html, clean_html, text_content, error, duration_ms, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		scrapeID, urlID, nullable(rec.RunID), rec.HTTPStatus, rec.ContentType, rec.FetchedWith,
-		allowed, rec.Title, rec.RawHTML, rec.CleanHTML, rec.Text, rec.Err,
-		rec.Duration.Milliseconds(), now); err != nil {
-		return "", fmt.Errorf("saving scrape: %w", err)
-	}
-
-	for _, img := range rec.Images {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO scrape_images (id, scrape_id, url, alt, width, height, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			newID(), scrapeID, img.URL, img.Alt, img.Width, img.Height, now); err != nil {
-			return "", fmt.Errorf("saving image: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return scrapeID, nil
-}
+// Scrape storage (SaveScrape, GetScrape, RunScrapeIDs) lives in scrapecache.go:
+// scrapes are keyed by URL in the scrape_cache table, not inserted per fetch.
 
 // ---- read side, backing the by-id endpoints ----
 
@@ -299,7 +283,7 @@ func (s *Store) GetRun(ctx context.Context, runID string) (*RunSummary, error) {
 	s.db.QueryRowContext(ctx,
 		`SELECT COUNT(DISTINCT su.url_id) FROM search_urls su
 		   JOIN searches se ON se.id = su.search_id WHERE se.run_id = ?`, runID).Scan(&r.URLs)
-	s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scrapes WHERE run_id = ?`, runID).Scan(&r.Scrapes)
+	s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scrape_cache WHERE run_id = ?`, runID).Scan(&r.Scrapes)
 	return &r, nil
 }
 
@@ -312,7 +296,7 @@ func (s *Store) ListRuns(ctx context.Context, limit int) ([]RunSummary, error) {
 		        (SELECT COUNT(*) FROM searches WHERE run_id = r.id),
 		        (SELECT COUNT(DISTINCT su.url_id) FROM search_urls su
 		           JOIN searches se ON se.id = su.search_id WHERE se.run_id = r.id),
-		        (SELECT COUNT(*) FROM scrapes WHERE run_id = r.id)
+		        (SELECT COUNT(*) FROM scrape_cache WHERE run_id = r.id)
 		  FROM runs r
 		  ORDER BY r.started_at DESC LIMIT ?`, limit)
 	if err != nil {
@@ -439,63 +423,5 @@ type ImageRow struct {
 	Height int    `json:"height,omitempty"`
 }
 
-// GetScrape returns one scrape. includeRaw is opt-in because the raw HTML is
-// usually far larger than everything else combined.
-func (s *Store) GetScrape(ctx context.Context, scrapeID string, includeRaw bool) (*ScrapeDetail, error) {
-	var d ScrapeDetail
-	var robots int
-	var runID sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT s.id, u.url, s.run_id, COALESCE(s.http_status,0), COALESCE(s.content_type,''),
-		        COALESCE(s.fetched_with,''), s.robots_allowed, COALESCE(s.title,''),
-		        COALESCE(s.clean_html,''), COALESCE(s.text_content,''), COALESCE(s.raw_html,''),
-		        COALESCE(s.error,''), COALESCE(s.duration_ms,0), s.created_at
-		   FROM scrapes s JOIN urls u ON u.id = s.url_id
-		  WHERE s.id = ?`, scrapeID).
-		Scan(&d.ID, &d.URL, &runID, &d.HTTPStatus, &d.ContentType, &d.FetchedWith, &robots,
-			&d.Title, &d.CleanHTML, &d.Text, &d.RawHTML, &d.Error, &d.DurationMS, &d.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	d.RunID = runID.String
-	d.RobotsAllowed = robots == 1
-	if !includeRaw {
-		d.RawHTML = ""
-	}
-
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, url, COALESCE(alt,''), COALESCE(width,0), COALESCE(height,0)
-		   FROM scrape_images WHERE scrape_id = ? ORDER BY created_at`, scrapeID)
-	if err != nil {
-		return &d, nil
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var img ImageRow
-		if err := rows.Scan(&img.ID, &img.URL, &img.Alt, &img.Width, &img.Height); err != nil {
-			break
-		}
-		d.Images = append(d.Images, img)
-	}
-	return &d, nil
-}
-
-// RunScrapeIDs lists the scrapes produced by a run.
-func (s *Store) RunScrapeIDs(ctx context.Context, runID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id FROM scrapes WHERE run_id = ? ORDER BY created_at`, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
-}
+// GetScrape and RunScrapeIDs are defined in scrapecache.go, reading from the
+// scrape_cache table.

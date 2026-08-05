@@ -62,6 +62,7 @@ func allEngines() []engineDef {
 				`button[aria-label*="Accept"]`,
 			},
 			skipLabels: append([]string{"google"}, sharedSkipLabels...),
+			skipHosts:  []string{"google.com"},
 		},
 		{
 			name: "bing",
@@ -77,7 +78,7 @@ func allEngines() []engineDef {
 				`button[aria-label*="Accept"]`,
 			},
 			skipLabels: append([]string{"bing", "microsofttranslator"}, sharedSkipLabels...),
-			skipHosts:  []string{"go.microsoft.com", "login.live.com"},
+			skipHosts:  []string{"go.microsoft.com", "login.live.com", "msn.com", "onenote.com"},
 		},
 		{
 			name: "duckduckgo",
@@ -89,7 +90,7 @@ func allEngines() []engineDef {
 			searchBox:    []string{"#searchbox_input", `input[name="q"]`},
 			resultRoots:  []string{`[data-testid="mainline"]`, "ol.react-results--main", "#links"},
 			skipLabels:   append([]string{"duckduckgo", "duck"}, sharedSkipLabels...),
-			skipHosts:    []string{"spreadprivacy.com"},
+			skipHosts:    []string{"spreadprivacy.com", "apps.apple.com"},
 		},
 	}
 }

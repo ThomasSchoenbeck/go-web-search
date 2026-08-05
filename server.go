@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,30 +17,43 @@ import (
 )
 
 type apiServer struct {
-	cfg  Config
-	h    *harvester
-	http *http.Server
+	cfg      Config
+	h        *harvester
+	llm      *LLMClient
+	resolver *resolver
+	http     *http.Server
 }
 
 // ---- request and response shapes, shared by REST and MCP ----
 
 type SearchRequest struct {
-	Terms  []string `json:"terms" jsonschema:"search terms to run"`
-	Scrape bool     `json:"scrape,omitempty" jsonschema:"also scrape the URLs that were found"`
+	Terms     []string `json:"terms" jsonschema:"search terms to run"`
+	Scrape    bool     `json:"scrape,omitempty" jsonschema:"also fetch page contents for the URLs found; set true ONLY when the user explicitly asked to scrape"`
+	UseCache  *bool    `json:"use_cache,omitempty" jsonschema:"reuse the search cache (default true); set false to force a live search"`
+	UseMemory *bool    `json:"use_memory,omitempty" jsonschema:"consult memory first and skip the web when it can answer (default true)"`
+	MaxAge    int      `json:"max_age_seconds,omitempty" jsonschema:"reject cached or remembered results older than this many seconds"`
+	Remember  string   `json:"remember,omitempty" jsonschema:"how durably to keep what is learned: short, long, permanent, or off (default short)"`
 }
 
 type SearchResponse struct {
-	RunID    string          `json:"run_id"`
-	Terms    int             `json:"terms"`
-	URLs     []URLRow        `json:"urls"`
-	Scrapes  []ScrapeOutcome `json:"scrapes,omitempty"`
-	Complete bool            `json:"complete"`
-	Note     string          `json:"note,omitempty"`
+	RunID    string            `json:"run_id,omitempty"`
+	Terms    int               `json:"terms"`
+	Source   string            `json:"source,omitempty"`
+	Answers  map[string]string `json:"answers,omitempty"`
+	URLs     []CachedURL       `json:"urls"`
+	Scrapes  []ScrapeOutcome   `json:"scrapes,omitempty"`
+	Complete bool              `json:"complete"`
+	Note     string            `json:"note,omitempty"`
 }
 
 type ScrapeRequest struct {
-	URLs  []string `json:"urls" jsonschema:"absolute URLs to fetch"`
-	RunID string   `json:"run_id,omitempty" jsonschema:"when passed with urls, links scrapes to the search that found them; when passed without urls, scrapes everything that run found (use only when full coverage is needed)"`
+	URLs          []string `json:"urls" jsonschema:"absolute URLs to fetch"`
+	RunID         string   `json:"run_id,omitempty" jsonschema:"when passed with urls, links scrapes to the search that found them; when passed without urls, scrapes everything that run found (use only when full coverage is needed)"`
+	UseCache      *bool    `json:"use_cache,omitempty" jsonschema:"reuse the scrape cache (default true); set false to force a fresh fetch"`
+	MaxAge        int      `json:"max_age_seconds,omitempty" jsonschema:"reject cached content older than this many seconds"`
+	Remember      string   `json:"remember,omitempty" jsonschema:"distil scraped pages into memory at this durability: short, long, permanent, or off (default short)"`
+	DistillDetail string   `json:"distill_detail,omitempty" jsonschema:"how many facts to distil per page: brief, normal (default), or thorough"`
+	DistillFocus  string   `json:"distill_focus,omitempty" jsonschema:"optional free-text guidance on what to prioritise when distilling, e.g. 'upcoming game dates and opponents only'"`
 }
 
 type ScrapeResponse struct {
@@ -57,11 +73,19 @@ type Snippet struct {
 }
 
 func newAPIServer(cfg Config, h *harvester) *apiServer {
-	s := &apiServer{cfg: cfg, h: h}
+	llm := newLLMClient(cfg.LLM, cfg.LLM.Timeout.Duration, h.log)
+	s := &apiServer{cfg: cfg, h: h, llm: llm, resolver: newResolver(cfg, h.store, llm, h)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/search", s.handleSearch)
 	mux.HandleFunc("POST /api/scrape", s.handleScrape)
+	mux.HandleFunc("POST /api/memory/query", s.handleMemoryQuery)
+	mux.HandleFunc("POST /api/memory/store", s.handleMemoryStore)
+	mux.HandleFunc("GET /api/memory/facts", s.handleListFacts)
+	mux.HandleFunc("GET /api/memory/facts/{id}", s.handleGetFact)
+	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("POST /api/distill/preview", s.handleDistillPreview)
+	mux.HandleFunc("POST /api/vacuum", s.handleVacuum)
 	mux.HandleFunc("GET /api/runs", s.handleListRuns)
 	mux.HandleFunc("GET /api/runs/{id}", s.handleGetRun)
 	mux.HandleFunc("GET /api/runs/{id}/urls", s.handleRunURLs)
@@ -138,74 +162,394 @@ func (s *apiServer) runSearch(ctx context.Context, req SearchRequest) (*SearchRe
 	if len(req.Terms) == 0 {
 		return nil, errors.New("at least one search term is required")
 	}
-
-	runID, err := s.h.store.StartRun(ctx, "api-search", "")
-	if err != nil {
-		return nil, err
-	}
-	defer s.h.store.FinishRun(ctx, runID)
-
-	never := context.Background() // no signal handling inside a request
-	complete, err := s.h.SearchTerms(ctx, runID, req.Terms, never)
-	if err != nil {
-		return nil, err
+	o := resolveOpts{
+		useMemory: boolOr(req.UseMemory, true),
+		useCache:  boolOr(req.UseCache, true),
+		maxAge:    time.Duration(req.MaxAge) * time.Second,
+		remember:  req.Remember,
 	}
 
-	urls, err := s.h.store.RunURLs(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
+	resp := &SearchResponse{Terms: len(req.Terms), Answers: map[string]string{}, Complete: true}
+	sources := map[string]bool{}
+	seen := map[string]bool{}
 
-	resp := &SearchResponse{RunID: runID, Terms: len(req.Terms), URLs: urls, Complete: complete}
-
-	if req.Scrape && s.cfg.Scrape.Enabled {
-		outcomes, err := s.h.ScrapeRun(ctx, runID)
+	// The memory -> cache -> engines chain runs per term in the resolver.
+	for _, term := range req.Terms {
+		out, err := s.resolver.Search(ctx, term, o)
 		if err != nil {
 			return nil, err
 		}
-		resp.Scrapes = outcomes
-		if len(urls) > s.cfg.Scrape.MaxURLs {
+		sources[out.Source] = true
+		if out.Source == "memory" {
+			resp.Answers[term] = out.Answer
+			continue
+		}
+		if out.RunID != "" {
+			resp.RunID = out.RunID
+		}
+		for _, u := range out.URLs {
+			if !seen[u.URL] {
+				seen[u.URL] = true
+				resp.URLs = append(resp.URLs, u)
+			}
+		}
+	}
+	resp.Source = combineSources(sources)
+	if len(resp.Answers) == 0 {
+		resp.Answers = nil
+	}
+
+	if req.Scrape && s.cfg.Scrape.Enabled && len(resp.URLs) > 0 {
+		runID := resp.RunID
+		if runID == "" {
+			id, err := s.h.store.StartRun(ctx, "api-scrape", "")
+			if err != nil {
+				return nil, err
+			}
+			defer s.h.store.FinishRun(ctx, id)
+			runID = id
+		}
+		urls := make([]string, len(resp.URLs))
+		for i, u := range resp.URLs {
+			urls[i] = u.URL
+		}
+		resp.Scrapes = s.h.scraper.Scrape(ctx, runID, urls, o.useCache, o.maxAge)
+		s.rememberScrapes(ctx, req.Remember, "", "", resp.Scrapes)
+		if len(resp.URLs) > s.cfg.Scrape.MaxURLs {
 			resp.Note = fmt.Sprintf("scraped the first %d of %d URLs (scrape.max_urls); "+
-				"fetch the rest with POST /api/scrape", s.cfg.Scrape.MaxURLs, len(urls))
+				"fetch the rest with POST /api/scrape", s.cfg.Scrape.MaxURLs, len(resp.URLs))
 		}
 	}
 	return resp, nil
 }
 
 func (s *apiServer) runScrape(ctx context.Context, req ScrapeRequest) (*ScrapeResponse, error) {
+	useCache := boolOr(req.UseCache, true)
+	maxAge := time.Duration(req.MaxAge) * time.Second
+
 	var (
 		outcomes []ScrapeOutcome
-		err      error
 		runID    string
 	)
 	switch {
 	case req.RunID != "" && len(req.URLs) == 0:
 		// Batch scrape: fetch every URL a previous run found.
-		outcomes, err = s.h.ScrapeRun(ctx, req.RunID)
+		rows, err := s.h.store.RunURLs(ctx, req.RunID)
+		if err != nil {
+			return nil, err
+		}
+		urls := make([]string, len(rows))
+		for i, r := range rows {
+			urls[i] = r.URL
+		}
+		outcomes = s.h.scraper.Scrape(ctx, req.RunID, urls, useCache, maxAge)
 		runID = req.RunID
 	case len(req.URLs) > 0:
-		// Selective scrape: fetch only the given URLs.
 		if req.RunID != "" {
 			// Associated with an existing search run for tracing.
-			outcomes = s.h.ScrapeURLs(ctx, req.RunID, req.URLs)
+			outcomes = s.h.scraper.Scrape(ctx, req.RunID, req.URLs, useCache, maxAge)
 			runID = req.RunID
 		} else {
 			// Direct scrape: no parent search, create its own run.
-			runID, err = s.h.store.StartRun(ctx, "api-scrape", "")
+			id, err := s.h.store.StartRun(ctx, "api-scrape", "")
 			if err != nil {
 				return nil, err
 			}
-			defer s.h.store.FinishRun(ctx, runID)
-			outcomes = s.h.ScrapeURLs(ctx, runID, req.URLs)
-			runID = runID
+			defer s.h.store.FinishRun(ctx, id)
+			outcomes = s.h.scraper.Scrape(ctx, id, req.URLs, useCache, maxAge)
+			runID = id
 		}
 	default:
 		return nil, errors.New("provide either urls or run_id")
 	}
+	s.rememberScrapes(ctx, req.Remember, req.DistillDetail, req.DistillFocus, outcomes)
+	return &ScrapeResponse{RunID: runID, Results: outcomes}, nil
+}
+
+// boolOr resolves an optional bool flag to its default when unset.
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// combineSources labels a multi-term search by where its results came from.
+func combineSources(m map[string]bool) string {
+	switch len(m) {
+	case 0:
+		return "live"
+	case 1:
+		for k := range m {
+			return k
+		}
+	}
+	return "mixed"
+}
+
+// rememberTier interprets the remember flag: off disables storage, an explicit
+// tier is used as-is, anything else defaults to on at the configured tier.
+func rememberTier(remember, def string) (store bool, tier string) {
+	switch strings.ToLower(strings.TrimSpace(remember)) {
+	case "off", "none", "no", "false":
+		return false, ""
+	case tierShort, tierLong, tierPermanent:
+		return true, remember
+	default:
+		return true, def
+	}
+}
+
+// rememberScrapes enqueues distillation of successful scrapes into memory unless
+// the caller turned remembering off.
+func (s *apiServer) rememberScrapes(ctx context.Context, remember, detail, focus string, outcomes []ScrapeOutcome) {
+	store, tier := rememberTier(remember, s.cfg.Memory.RememberDefault)
+	if !store {
+		return
+	}
+	for _, o := range outcomes {
+		if o.ScrapeID != "" && o.TextChars > 0 {
+			if err := enqueueDistill(ctx, s.h.store, o.ScrapeID, tier, detail, focus); err != nil {
+				s.h.log.Printf("remember: enqueue distill for %s: %v", o.ScrapeID, err)
+			}
+		}
+	}
+}
+
+// ---- memory operations, shared by REST and MCP ----
+
+type MemoryQueryRequest struct {
+	Question string `json:"question" jsonschema:"the question to try to answer from memory"`
+}
+
+type MemoryFactView struct {
+	Text       string  `json:"text"`
+	SourceURL  string  `json:"source_url,omitempty"`
+	Volatility string  `json:"volatility,omitempty"`
+	Similarity float64 `json:"similarity,omitempty"`
+}
+
+type MemoryQueryResponse struct {
+	Found  bool             `json:"found"`
+	Answer string           `json:"answer,omitempty"`
+	Facts  []MemoryFactView `json:"facts,omitempty"`
+}
+
+type MemoryStoreRequest struct {
+	Text       string `json:"text" jsonschema:"the fact to remember, stated so it stands alone"`
+	SourceURL  string `json:"source_url,omitempty" jsonschema:"where the fact came from"`
+	Volatility string `json:"volatility,omitempty" jsonschema:"stable or time-sensitive"`
+	Remember   string `json:"remember,omitempty" jsonschema:"durability: short, long or permanent (default short)"`
+}
+
+type MemoryStoreResponse struct {
+	ID string `json:"id"`
+}
+
+func (s *apiServer) runMemoryQuery(ctx context.Context, req MemoryQueryRequest) (*MemoryQueryResponse, error) {
+	if strings.TrimSpace(req.Question) == "" {
+		return nil, errors.New("question is required")
+	}
+	ans, facts, ok, err := MemoryAnswer(ctx, s.h.store, s.llm, s.cfg.Cache, s.cfg.Memory, req.Question)
 	if err != nil {
 		return nil, err
 	}
-	return &ScrapeResponse{RunID: runID, Results: outcomes}, nil
+	resp := &MemoryQueryResponse{Found: ok, Answer: ans}
+	for _, f := range facts {
+		resp.Facts = append(resp.Facts, MemoryFactView{
+			Text: f.Text, SourceURL: f.SourceURL, Volatility: f.Volatility, Similarity: f.Similarity,
+		})
+	}
+	return resp, nil
+}
+
+func (s *apiServer) runMemoryStore(ctx context.Context, req MemoryStoreRequest) (*MemoryStoreResponse, error) {
+	if strings.TrimSpace(req.Text) == "" {
+		return nil, errors.New("text is required")
+	}
+	store, tier := rememberTier(req.Remember, s.cfg.Memory.RememberDefault)
+	if !store {
+		return nil, errors.New("remember is off; nothing stored")
+	}
+	id, err := s.h.store.StoreFact(ctx, s.cfg.Cache, s.cfg.Memory, s.llm, req.Text, req.SourceURL, req.Volatility, tier)
+	if err != nil {
+		return nil, err
+	}
+	return &MemoryStoreResponse{ID: id}, nil
+}
+
+func (s *apiServer) handleMemoryQuery(w http.ResponseWriter, r *http.Request) {
+	var req MemoryQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := s.runMemoryQuery(r.Context(), req)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *apiServer) handleMemoryStore(w http.ResponseWriter, r *http.Request) {
+	var req MemoryStoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := s.runMemoryStore(r.Context(), req)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleListFacts browses distilled memory facts. Query params: limit, offset, q
+// (case-insensitive text substring).
+func (s *apiServer) handleListFacts(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	facts, err := s.h.store.ListFacts(r.Context(), r.URL.Query().Get("q"), limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(facts), "facts": facts})
+}
+
+// FactDetail is a single fact plus the basis it was distilled from: the source
+// scrape's sizes (the bloat signal) and a link to read the raw material.
+type FactDetail struct {
+	Fact    FactSummary  `json:"fact"`
+	Source  *ScrapeSizes `json:"source,omitempty"`
+	ReadRaw string       `json:"read_raw,omitempty"`
+	Note    string       `json:"note,omitempty"`
+}
+
+func (s *apiServer) handleGetFact(w http.ResponseWriter, r *http.Request) {
+	f, ok, err := s.h.store.scanFact(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, errors.New("fact not found"))
+		return
+	}
+	detail := FactDetail{Fact: FactSummary{
+		ID: f.ID, Text: f.Text, TextChars: len(f.Text), SourceURL: f.SourceURL,
+		Volatility: f.Volatility, Tier: f.Tier, HitCount: f.HitCount, ExpiresAt: f.ExpiresAt,
+	}}
+	if f.SourceURL != "" {
+		if sz, found, serr := s.h.store.ScrapeSizesByURL(r.Context(), f.SourceURL); serr == nil {
+			if found {
+				detail.Source = sz
+				detail.ReadRaw = fmt.Sprintf("/api/scrapes/%s?raw=1", sz.ScrapeID)
+			} else {
+				detail.Note = "source page is no longer cached, so the raw material can't be retrieved"
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *apiServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.h.store.Stats(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+// DistillPreviewRequest runs the distiller against one scrape synchronously with
+// overridable settings, storing nothing — a bench for tuning prompt/settings.
+type DistillPreviewRequest struct {
+	ScrapeID      string `json:"scrape_id"`
+	Detail        string `json:"detail,omitempty"`          // brief|normal|thorough
+	Focus         string `json:"focus,omitempty"`           // free-text guidance
+	SystemPrompt  string `json:"system_prompt,omitempty"`   // full override; ignores detail/focus when set
+	MaxInputChars int    `json:"max_input_chars,omitempty"` // 0 = distillMaxChars
+	MaxTokens     *int   `json:"max_tokens,omitempty"`
+	NoThink       *bool  `json:"no_think,omitempty"`
+}
+
+type DistillPreviewResponse struct {
+	SystemPrompt     string          `json:"system_prompt"`
+	InputChars       int             `json:"input_chars"`
+	FactCount        int             `json:"fact_count"`
+	Facts            []extractedFact `json:"facts"`
+	PromptTokens     int             `json:"prompt_tokens"`
+	CompletionTokens int             `json:"completion_tokens"`
+	TokPerSec        float64         `json:"tok_per_sec"`
+	DurationMS       int64           `json:"duration_ms"`
+}
+
+func (s *apiServer) handleDistillPreview(w http.ResponseWriter, r *http.Request) {
+	var req DistillPreviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.ScrapeID) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("scrape_id is required"))
+		return
+	}
+	scrape, err := s.h.store.GetScrape(r.Context(), req.ScrapeID, false)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	text := scrape.Text
+	limit := req.MaxInputChars
+	if limit <= 0 {
+		limit = distillMaxChars
+	}
+	if len(text) > limit {
+		text = text[:limit]
+	}
+	sys := req.SystemPrompt
+	if strings.TrimSpace(sys) == "" {
+		sys = distillSystemPrompt(req.Detail, req.Focus)
+	}
+	facts, usage, err := extractFacts(r.Context(), s.llm, sys, text, chatParams{maxTokens: req.MaxTokens, noThink: req.NoThink})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	resp := DistillPreviewResponse{
+		SystemPrompt:     sys,
+		InputChars:       len(text),
+		FactCount:        len(facts),
+		Facts:            facts,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		DurationMS:       usage.Duration.Milliseconds(),
+	}
+	if usage.CompletionTokens > 0 && usage.Duration > 0 {
+		resp.TokPerSec = float64(usage.CompletionTokens) / usage.Duration.Seconds()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *apiServer) mcpMemoryQuery(ctx context.Context, _ *mcp.CallToolRequest, in MemoryQueryRequest) (
+	*mcp.CallToolResult, MemoryQueryResponse, error) {
+	resp, err := s.runMemoryQuery(ctx, in)
+	if err != nil {
+		return nil, MemoryQueryResponse{}, err
+	}
+	return nil, *resp, nil
+}
+
+func (s *apiServer) mcpMemoryStore(ctx context.Context, _ *mcp.CallToolRequest, in MemoryStoreRequest) (
+	*mcp.CallToolResult, MemoryStoreResponse, error) {
+	resp, err := s.runMemoryStore(ctx, in)
+	if err != nil {
+		return nil, MemoryStoreResponse{}, err
+	}
+	return nil, *resp, nil
 }
 
 // snippetsFor loads capped text for each successful scrape, which is what makes
@@ -351,20 +695,19 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "web_search",
-		Description: "Search Google, Bing and DuckDuckGo for one or more terms and return the " +
-			"destination URLs found across all three engines. Set scrape=true to also fetch " +
-			"the page contents of every URL found. Returns a run_id for tracing; full details " +
-			"stay retrievable by id.",
+		Description: "Search the web for terms and return destination URLs, tagged by source " +
+			"(memory|cache|live|mixed); memory and cache are checked before the engines. Set " +
+			"scrape=true ONLY if the user explicitly asked to fetch page contents directly. Don't re-run the " +
+			"same query to retry — repeats trigger the engines' bot detection.",
 	}, s.mcpSearch)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "web_scrape",
-		Description: "Fetch and clean page contents. When selecting urls from a web_search result, " +
-			"pick broadly: aim for at least one URL per domain, skip obvious navigation links " +
-			"like /roster, /stats, /news, /videos, /about, and don't cluster on a single site. " +
-			"Pass the run_id from web_search to link scrapes back to that search for tracing. " +
-			"For direct scrapes (no prior search), just pass urls — a run is created automatically. " +
-			"Returns text snippets plus scrape ids for the full documents.",
+		Description: "Fetch and clean page contents for the given URLs; returns text snippets plus " +
+			"scrape ids. Pick broadly — about 1-2 URL per domain, skip pure navigation links. When the " +
+			"user says \"scrape all\", don't cherry-pick: fetch every not-yet-scraped URL from this " +
+			"conversation's searches that belong to the current topic (pass the full url list, or a run_id with no urls); if you'd skip " +
+			"any, ask first.",
 	}, s.mcpScrape)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -377,7 +720,96 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 		Description: "Summarise a run by id: how many searches, urls and scrapes it produced.",
 	}, s.mcpGetRun)
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "memory_query",
+		Description: "Ask what is already known. " +
+			"Returns found=true with a synthesized answer only when memory clears the confidence " +
+			"gates; otherwise found=false and you should web_search instead.",
+	}, s.mcpMemoryQuery)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "memory_store",
+		Description: "Remember a single self-contained fact directly. " +
+			"remember sets durability (short|long|permanent).",
+	}, s.mcpMemoryStore)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "current_time",
+		Description: "ALWAYS ask me first in a conversation before executing search. " +
+			"Return the current date and time of the machine running this server.",
+	}, s.mcpCurrentTime)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "approximate_location",
+		Description: "Return the APPROXIMATE geographic location of the machine running this " +
+			"server, derived from its public IP via ipinfo.io. Only approximate: it reflects the " +
+			"ISP/network location, not a precise position, and can be off by a city or more. " +
+			"Returns city, region, country, lat/long, postal code and timezone.",
+	}, s.mcpApproxLocation)
+
 	return server
+}
+
+type currentTimeInput struct{}
+
+type currentTimeOutput struct {
+	RFC3339  string `json:"rfc3339"`
+	Unix     int64  `json:"unix"`
+	Timezone string `json:"timezone"`
+	Weekday  string `json:"weekday"`
+	Human    string `json:"human"`
+}
+
+func (s *apiServer) mcpCurrentTime(_ context.Context, _ *mcp.CallToolRequest, _ currentTimeInput) (
+	*mcp.CallToolResult, currentTimeOutput, error) {
+
+	now := time.Now()
+	zone, _ := now.Zone()
+	return nil, currentTimeOutput{
+		RFC3339:  now.Format(time.RFC3339),
+		Unix:     now.Unix(),
+		Timezone: zone,
+		Weekday:  now.Weekday().String(),
+		Human:    now.Format("Monday, 2 January 2006, 15:04:05 MST"),
+	}, nil
+}
+
+type approxLocationInput struct{}
+
+// approxLocationOutput mirrors the ipinfo.io fields we keep. Decoding the full
+// response into just these fields silently drops ip, hostname, org and readme.
+type approxLocationOutput struct {
+	City     string `json:"city"`
+	Region   string `json:"region"`
+	Country  string `json:"country"`
+	Loc      string `json:"loc"` // "lat,long"
+	Postal   string `json:"postal"`
+	Timezone string `json:"timezone"`
+}
+
+func (s *apiServer) mcpApproxLocation(ctx context.Context, _ *mcp.CallToolRequest, _ approxLocationInput) (
+	*mcp.CallToolResult, approxLocationOutput, error) {
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ipinfo.io/json", nil)
+	if err != nil {
+		return nil, approxLocationOutput{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, approxLocationOutput{}, fmt.Errorf("ipinfo.io: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, approxLocationOutput{}, fmt.Errorf("ipinfo.io: status %d", resp.StatusCode)
+	}
+
+	var out approxLocationOutput
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, approxLocationOutput{}, fmt.Errorf("ipinfo.io: decoding response: %w", err)
+	}
+	return nil, out, nil
 }
 
 func (s *apiServer) mcpSearch(ctx context.Context, _ *mcp.CallToolRequest, in SearchRequest) (
@@ -436,6 +868,44 @@ func (s *apiServer) mcpGetRun(ctx context.Context, _ *mcp.CallToolRequest, in ge
 func serveMode(cfg Config, art *artifacts, h *harvester, stop context.Context) error {
 	srv := newAPIServer(cfg, h)
 
+	// Background job system: worker pool + poller + reaper. Handlers (embed,
+	// distill, cleanup, re-embed) are registered on the runner as those
+	// subsystems land. Cancelling jobCtx on shutdown stops every goroutine.
+	jobCtx, jobCancel := context.WithCancel(context.Background())
+	defer jobCancel()
+	llm := newLLMClient(cfg.LLM, cfg.LLM.Timeout.Duration, art.Log)
+	runner := newJobRunner(h.store, art.Log, cfg.Database.MaxOpenConns, time.Second, cfg.Jobs.StaleAfter.Duration)
+	registerJobs(runner, cfg, h, llm)
+
+	// Startup maintenance, before any worker holds a connection: trim processed
+	// blobs, then VACUUM to hand the freed space back (VACUUM needs exclusive
+	// access, which is why it runs here rather than mid-serve).
+	if cfg.Retention.TrimRaw {
+		if err := h.store.TrimRawContent(jobCtx, cfg.Retention.RawMaxAge.Duration, cfg.Retention.RawKeepLast); err != nil {
+			art.Log.Printf("WARNING: startup trim failed: %v", err)
+		}
+	}
+	if cfg.Retention.VacuumOnStartup {
+		art.Log.Printf("vacuuming database on startup...")
+		vstart := time.Now()
+		if err := h.store.Vacuum(jobCtx); err != nil {
+			art.Log.Printf("WARNING: startup vacuum failed: %v", err)
+		} else {
+			art.Log.Printf("vacuum done in %s", time.Since(vstart).Round(time.Millisecond))
+		}
+	}
+	if cfg.Retention.VacuumAt != "" {
+		go scheduledVacuum(jobCtx, cfg.Retention.VacuumAt, h.store, art.Log)
+	}
+
+	runner.Start(jobCtx)
+	if err := bootVectors(jobCtx, h.store, llm, art.Log); err != nil {
+		// A failure here leaves no active vector table, so every embed job will
+		// fail with "no active vector table yet" until it is fixed. Make it loud
+		// rather than a soft warning that scrolls past unnoticed.
+		art.Log.Printf("ERROR: vector store did NOT initialise; embeddings and semantic memory are disabled until fixed: %v", err)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		art.Log.Printf("listening on http://%s", cfg.Server.Addr)
@@ -459,4 +929,67 @@ func serveMode(cfg Config, art *artifacts, h *harvester, stop context.Context) e
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// scheduledVacuum runs VACUUM once a day at the given "HH:MM" local time until
+// ctx is cancelled. VACUUM stalls all queries while it runs, hence off-peak.
+func scheduledVacuum(ctx context.Context, at string, store *Store, logger *log.Logger) {
+	hm, err := time.Parse("15:04", at)
+	if err != nil {
+		logger.Printf("WARNING: bad vacuum_at %q (want HH:MM): %v", at, err)
+		return
+	}
+	for {
+		now := time.Now()
+		next := time.Date(now.Year(), now.Month(), now.Day(), hm.Hour(), hm.Minute(), 0, 0, now.Location())
+		if !next.After(now) {
+			next = next.Add(24 * time.Hour)
+		}
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+			logger.Printf("scheduled vacuum starting")
+			start := time.Now()
+			if err := store.Vacuum(ctx); err != nil {
+				logger.Printf("WARNING: scheduled vacuum failed: %v", err)
+			} else {
+				logger.Printf("scheduled vacuum done in %s", time.Since(start).Round(time.Millisecond))
+			}
+		}
+	}
+}
+
+// VacuumResponse reports the outcome of an on-demand VACUUM, including how much
+// the file shrank (best-effort file-size read).
+type VacuumResponse struct {
+	DurationMS     int64 `json:"duration_ms"`
+	BeforeBytes    int64 `json:"before_bytes,omitempty"`
+	AfterBytes     int64 `json:"after_bytes,omitempty"`
+	ReclaimedBytes int64 `json:"reclaimed_bytes,omitempty"`
+}
+
+func (s *apiServer) handleVacuum(w http.ResponseWriter, r *http.Request) {
+	dbPath := filepath.Join(s.cfg.Database.DataDir, s.cfg.Database.MainDB)
+	before := fileSize(dbPath)
+	start := time.Now()
+	if err := s.h.store.Vacuum(r.Context()); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	after := fileSize(dbPath)
+	resp := VacuumResponse{DurationMS: time.Since(start).Milliseconds(), BeforeBytes: before, AfterBytes: after}
+	if before > 0 && after > 0 {
+		resp.ReclaimedBytes = before - after
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func fileSize(path string) int64 {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Size()
+	}
+	return 0
 }

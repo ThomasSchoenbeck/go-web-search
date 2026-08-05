@@ -30,6 +30,7 @@ type ScrapeOutcome struct {
 
 type scraper struct {
 	cfg     ScrapeConfig
+	tier    TierConfig
 	store   *Store
 	log     *log.Logger
 	client  *http.Client
@@ -42,7 +43,7 @@ type scraper struct {
 	browserSlots chan struct{}
 }
 
-func newScraper(cfg ScrapeConfig, store *Store, logger *log.Logger, sess *session) *scraper {
+func newScraper(cfg ScrapeConfig, tier TierConfig, store *Store, logger *log.Logger, sess *session) *scraper {
 	client := &http.Client{
 		Timeout: cfg.HTTPTimeout.Duration,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -58,6 +59,7 @@ func newScraper(cfg ScrapeConfig, store *Store, logger *log.Logger, sess *sessio
 	}
 	return &scraper{
 		cfg:          cfg,
+		tier:         tier,
 		store:        store,
 		log:          logger,
 		client:       client,
@@ -71,7 +73,7 @@ func newScraper(cfg ScrapeConfig, store *Store, logger *log.Logger, sess *sessio
 // within a host run one after another with a delay. That is the shape that
 // keeps a crawl fast without hammering any single server, which is the whole
 // point of grouping by domain rather than just firing N workers at a queue.
-func (s *scraper) Scrape(ctx context.Context, runID string, urls []string) []ScrapeOutcome {
+func (s *scraper) Scrape(ctx context.Context, runID string, urls []string, useCache bool, maxAge time.Duration) []ScrapeOutcome {
 	if len(urls) > s.cfg.MaxURLs && s.cfg.MaxURLs > 0 {
 		s.log.Printf("scrape: capping %d urls at max_urls=%d", len(urls), s.cfg.MaxURLs)
 		urls = urls[:s.cfg.MaxURLs]
@@ -122,7 +124,7 @@ func (s *scraper) Scrape(ctx context.Context, runID string, urls []string) []Scr
 						return
 					}
 				}
-				outcome := s.one(ctx, runID, raw)
+				outcome := s.one(ctx, runID, raw, useCache, maxAge)
 				mu.Lock()
 				results = append(results, outcome)
 				mu.Unlock()
@@ -135,7 +137,7 @@ func (s *scraper) Scrape(ctx context.Context, runID string, urls []string) []Scr
 	return results
 }
 
-func (s *scraper) one(ctx context.Context, runID, raw string) ScrapeOutcome {
+func (s *scraper) one(ctx context.Context, runID, raw string, useCache bool, maxAge time.Duration) ScrapeOutcome {
 	out := ScrapeOutcome{URL: raw}
 	started := time.Now()
 
@@ -145,11 +147,23 @@ func (s *scraper) one(ctx context.Context, runID, raw string) ScrapeOutcome {
 		return out
 	}
 
+	// Cache check: a fresh cached fetch short-circuits the network entirely.
+	var cached *scrapeCacheRow
+	if useCache {
+		if row, ok, cerr := s.store.LookupScrapeCache(ctx, raw); cerr == nil && ok {
+			cached = row
+			if freshEnough(row.ExpiresAt, row.FetchedAt, maxAge) {
+				s.store.touchScrapeCache(ctx, s.tier, row, false)
+				return cacheOutcome(row, "cache")
+			}
+		}
+	}
+
 	allowed, crawlDelay := s.robots.Allowed(ctx, target)
 	if !allowed {
 		out.Skipped = "disallowed by robots.txt"
 		s.log.Printf("scrape: %s skipped, robots.txt disallows it", raw)
-		id, err := s.store.SaveScrape(ctx, ScrapeRecord{
+		id, err := s.store.SaveScrape(ctx, s.tier, ScrapeRecord{
 			URL: raw, RunID: runID, RobotsAllowed: false,
 			Duration: time.Since(started),
 		})
@@ -166,8 +180,20 @@ func (s *scraper) one(ctx context.Context, runID, raw string) ScrapeOutcome {
 		}
 	}
 
-	body, status, contentType, err := s.fetchHTTP(ctx, raw)
+	// Conditional refresh: send the cached validators so an unchanged page comes
+	// back as a cheap 304 instead of a full re-download.
+	condETag, condLM := "", ""
+	if cached != nil {
+		condETag, condLM = cached.ETag, cached.LastModified
+	}
+	body, status, contentType, respETag, respLM, notModified, err := s.fetchHTTP(ctx, raw, condETag, condLM)
 	fetchedWith := "http"
+
+	if err == nil && notModified && cached != nil {
+		// Server confirmed our copy is current; slide its window and return it.
+		s.store.touchScrapeCache(ctx, s.tier, cached, true)
+		return cacheOutcome(cached, "cache-revalidated")
+	}
 
 	if err == nil && s.shouldRetryInBrowser(body, contentType) {
 		if browserBody, berr := s.fetchBrowser(ctx, raw); berr == nil {
@@ -187,6 +213,8 @@ func (s *scraper) one(ctx context.Context, runID, raw string) ScrapeOutcome {
 		RobotsAllowed: true,
 		RawHTML:       body,
 		Duration:      time.Since(started),
+		ETag:          respETag,
+		LastModified:  respLM,
 	}
 	if err != nil {
 		rec.Err = err.Error()
@@ -209,7 +237,7 @@ func (s *scraper) one(ctx context.Context, runID, raw string) ScrapeOutcome {
 		out.Skipped = "not html (" + contentType + ")"
 	}
 
-	id, saveErr := s.store.SaveScrape(ctx, rec)
+	id, saveErr := s.store.SaveScrape(ctx, s.tier, rec)
 	if saveErr != nil && out.Error == "" {
 		out.Error = saveErr.Error()
 	}
@@ -219,20 +247,35 @@ func (s *scraper) one(ctx context.Context, runID, raw string) ScrapeOutcome {
 	return out
 }
 
-func (s *scraper) fetchHTTP(ctx context.Context, raw string) (body string, status int, contentType string, err error) {
+func (s *scraper) fetchHTTP(ctx context.Context, raw, ifNoneMatch, ifModifiedSince string) (
+	body string, status int, contentType, etag, lastModified string, notModified bool, err error) {
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
-		return "", 0, "", err
+		return "", 0, "", "", "", false, err
 	}
 	req.Header.Set("User-Agent", s.cfg.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	if ifNoneMatch != "" {
+		req.Header.Set("If-None-Match", ifNoneMatch)
+	}
+	if ifModifiedSince != "" {
+		req.Header.Set("If-Modified-Since", ifModifiedSince)
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", 0, "", err
+		return "", 0, "", "", "", false, err
 	}
 	defer resp.Body.Close()
+
+	etag = resp.Header.Get("ETag")
+	lastModified = resp.Header.Get("Last-Modified")
+	contentType = resp.Header.Get("Content-Type")
+	if resp.StatusCode == http.StatusNotModified {
+		return "", resp.StatusCode, contentType, etag, lastModified, true, nil
+	}
 
 	limit := s.cfg.MaxBodyBytes
 	if limit <= 0 {
@@ -240,9 +283,9 @@ func (s *scraper) fetchHTTP(ctx context.Context, raw string) (body string, statu
 	}
 	raw3, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
-		return "", resp.StatusCode, resp.Header.Get("Content-Type"), err
+		return "", resp.StatusCode, contentType, etag, lastModified, false, err
 	}
-	return string(raw3), resp.StatusCode, resp.Header.Get("Content-Type"), nil
+	return string(raw3), resp.StatusCode, contentType, etag, lastModified, false, nil
 }
 
 // shouldRetryInBrowser is the JS-rendered heuristic: plain HTTP got HTML back,
