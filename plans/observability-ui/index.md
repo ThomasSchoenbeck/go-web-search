@@ -53,7 +53,11 @@ binary, single service, no separate deployable.
 
 Views over data that already has a GET endpoint reuse it unchanged: `/api/runs`,
 `/api/runs/{id}`, `/api/runs/{id}/urls|searches|scrapes`, `/api/searches/{id}/raw`,
-`/api/scrapes/{id}?raw=1`, `/api/memory/facts` + `/{id}`, `/api/stats`. New
+`/api/memory/facts` + `/{id}`, `/api/stats`. **Exception found in T008:**
+`/api/scrapes/{id}` was *not* reusable unchanged — `ScrapeDetail` omitted seven
+cache-metadata fields the scrape view has to show (`content_hash`, `etag`,
+`last_modified`, `tier`, `hit_count`, `expires_at`, `fetched_at`), so T008 added
+them to the struct and the SELECT. Read-only and additive. New
 read-only endpoints are needed for: provenance-for-a-URL, the jobs list, the
 `search_cache` and `scrape_cache` browsers, the logs query (over the separate log
 DB), the semantic-explorer embed+search, and the vector-projection dump. `/api/stats`
@@ -90,12 +94,16 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Core Views — Runs, Searches & SERPs
 
-- [ ] T006: Runs list + run detail view (reuses `/api/runs`, `/api/runs/{id}`, `/urls`, `/searches`, `/scrapes`) — [T006_runs_list_detail_view.md](T006_runs_list_detail_view.md)
-- [ ] T007: Searches view + raw SERP HTML viewer (reuses `/api/runs/{id}/searches`, `/api/searches/{id}/raw`) — [T007_searches_serp_viewer.md](T007_searches_serp_viewer.md)
+- [x] T006: Runs list + run detail view (reuses `/api/runs`, `/api/runs/{id}`, `/urls`, `/searches`, `/scrapes`) — [T006_runs_list_detail_view.md](T006_runs_list_detail_view.md)
+- [x] T007: Searches view + raw SERP HTML viewer (reuses `/api/runs/{id}/searches`, `/api/searches/{id}/raw`) — [T007_searches_serp_viewer.md](T007_searches_serp_viewer.md)
 
 ### Feature: Core Views — Scrapes
 
-- [ ] T008: Scrape detail view — raw/clean/text toggle + images + fetch metadata (reuses `/api/scrapes/{id}?raw=1`) — [T008_scrape_detail_view.md](T008_scrape_detail_view.md)
+- [x] T008: Scrape detail view — raw/clean/text toggle + images + fetch metadata (reuses `/api/scrapes/{id}?raw=1`) — [T008_scrape_detail_view.md](T008_scrape_detail_view.md)
+
+### Feature: Navigation Shell
+
+- [ ] T027: Navigation shell — persistent nav over every built view, active-route marking, one source of truth for routes — [T027_navigation_shell.md](T027_navigation_shell.md)
 
 ### Feature: Provenance / Causality
 
@@ -149,8 +157,11 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
 7. T007 — Searches view + raw SERP HTML viewer over the existing search endpoints (T006)
 8. T008 — Scrape detail view: raw/clean/text toggle, images, fetch metadata over `/api/scrapes/{id}` (T005)
 
-**Phase 3: Provenance / Causality**
+**Phase 3: Navigation & Provenance / Causality**
 
+8a. T027 — Navigation shell: persistent nav over the built views, one shared route
+definition. Placed here, before the remaining views, so each later view task
+registers its entry as it lands rather than leaving views URL-only (T006)
 9. T009 — NEW provenance-for-a-URL endpoint: backward searches+rank, forward scrape→facts→vectors, plus store queries (T005)
 10. T010 — Provenance view: pivot on a URL, render the backward/forward chain; fact→source reverse links here (T009)
 10a. T025 — NEW whole-run causality endpoint: assemble searches→urls→scrapes→facts for a run (T009)
@@ -283,6 +294,22 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
   changes values only for the current moment via direct controls (a dropdown for
   the interval, a toggle button for polling); it does not write back to config.
   With edge auth there is no bearer or token entry to store.
+- **Shared frontend machinery landed in Phase 2 (no task owned it).** Three
+  modules the later view tasks all depend on were added while building T006–T008,
+  because the plan assigned them to no task: `web/src/lib/router.ts` (the
+  History-API router the routing decision implies — Svelte ships none),
+  `web/src/lib/format.ts` (duration/timestamp/truncate display helpers), and
+  `web/src/lib/apiStub.ts` (test-only fetch stub keyed by path *and* query).
+  **Every later view task must register its route** — in the match chain in
+  `web/src/App.svelte` until T027 lands, in the shared route definition after —
+  add its navigation entry (T027) and its `data-testid` hooks. No view task
+  hand-rolls fetching, formatting or routing.
+- **The e2e seed is a shared, growing fixture.** `seedTestData` in
+  `testsupport.go` (T024) writes the fixture dataset every Playwright run reads,
+  and `web/tests/e2e/fixtures-data.ts` exports the fixed ids. Tasks that add a
+  view over data the seed does not yet contain must extend it there rather than
+  seeding per-spec. **Known gap: the seed writes only to the main DB — the log
+  database has no fixture rows at all**, which T018/T019 must add.
 - **Tone/convention parity.** Task files follow the `plans/cache-memory/`
   conventions exactly: the frontmatter block, the Description/Goal/How to
   Verify/Files to Touch/Dependencies sections, `[NEW]` markers on new files,

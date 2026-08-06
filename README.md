@@ -67,7 +67,7 @@ service. Embedding uses Qwen3-Embedding-8B via a self-hosted, OpenAI-compatible
 llama.cpp endpoint configured under `[[llm.model]]`; a model or dimension change
 triggers a blue/green re-embed migration.
 
-## Observability UI (planned)
+## Observability UI (in progress)
 
 A read-only web UI for inspecting everything the harvester stores and does. It is
 a Svelte 5 + Vite **client-only SPA written in TypeScript** — not SvelteKit, no
@@ -76,12 +76,16 @@ served by the existing `-mode serve` listener alongside the current REST and MCP
 routes. Single binary, single service, no separate deployable. The design and its
 task breakdown live in `plans/observability-ui/`.
 
-Planned views: runs, per-engine searches and their raw SERPs, scrapes
-(raw/clean/text plus images and fetch metadata), the provenance chains that
-connect them (run → search → url → scrape → memory fact → vector), memory facts,
-a semantic explorer over the vector store, the background job queue, the search
-and scrape caches, the logs, and a stats dashboard. An embeddings 2-D projection
-scatter is a deliberately later phase.
+**Built so far:** the runs list and run detail (with a run's URLs, searches and
+scrapes), the per-run searches view with a sandboxed raw-SERP viewer, and scrape
+detail with a raw/clean/text toggle, stored images and cache metadata. Routes are
+clean URLs, so any view can be linked to directly.
+
+**Still to come:** the provenance chains that connect them (run → search → url →
+scrape → memory fact → vector), memory facts, a semantic explorer over the vector
+store, the background job queue, the search and scrape caches, the logs, a stats
+dashboard, and — deliberately last — an embeddings 2-D projection scatter. Until
+the navigation shell lands, the views beyond runs are reached by URL.
 
 **Inspection only in v1.** The UI reads existing tables and adds read-only JSON
 endpoints where none exists. It triggers no searches, scrapes or distillation and

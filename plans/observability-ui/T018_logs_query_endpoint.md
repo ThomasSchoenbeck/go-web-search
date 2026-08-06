@@ -52,11 +52,26 @@ from `main.go` through `serveMode` into `newAPIServer` so the handler can reach 
   not an error.
 - The route is registered in `newAPIServer` and behind the shared `/api` middleware (`withAuth`, a no-op when `api_key` is unset — edge auth).
 
+## Note added after Phase 1 (test entry points)
+
+Serve mode is no longer the only path into `newAPIServer`. The test harness added
+in T024 reaches it two other ways, and both must be updated when this task
+changes the constructor's wiring, or the frontend and Go tests stop compiling:
+
+- `testEnv.Server()` in `testsupport.go` — used by the Go endpoint tests.
+- `testServeMode` in `testsupport.go`, behind `-mode testserve` — the browserless
+  server the Playwright harness runs.
+
+Also: `seedTestData` currently writes only to the **main** database, so the log
+DB is empty in every test run. This task (or T019) must seed log rows there, or
+the logs viewer has nothing to render in e2e and the filters cannot be exercised.
+
 ## Files to Touch
 
 - `logstore.go`
 - `server.go`
 - `main.go`
+- `testsupport.go` — log-store wiring for both test entry points, plus log fixtures
 - `logstore_test.go` [NEW]
 
 ## Dependencies

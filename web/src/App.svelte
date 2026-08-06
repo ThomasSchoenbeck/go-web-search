@@ -1,98 +1,42 @@
 <script lang="ts">
-  // Smoke usage of the shared read layer (T005): load the UI settings, fetch
-  // /api/stats through the resource wrapper, and drive a poller with the
-  // interval dropdown and on/off toggle the real views will reuse. Replaced by
-  // the actual views in later tasks.
-  import { onMount, onDestroy } from 'svelte'
-  import { statsResource } from './lib/api'
-  import { loadUIConfig, type UIConfig } from './lib/uiconfig'
-  import { createPoller, type Poller } from './lib/poll'
+  import { onMount } from 'svelte'
+  import { path, startRouter, matchRoute } from './lib/router'
+  import RunsList from './views/RunsList.svelte'
+  import RunDetail from './views/RunDetail.svelte'
+  import SearchesList from './views/SearchesList.svelte'
+  import SerpViewer from './views/SerpViewer.svelte'
+  import ScrapeDetail from './views/ScrapeDetail.svelte'
 
-  const stats = statsResource()
+  onMount(() => startRouter())
 
-  let settings: UIConfig | null = $state(null)
-  let settingsError: string | null = $state(null)
-  let poller: Poller | null = $state(null)
-  let polling = $state(false)
-  let intervalMs = $state(0)
-
-  const intervalChoices = [1000, 2000, 5000, 10000, 30000]
-
-  onMount(async () => {
-    await stats.reload()
-    try {
-      const config = await loadUIConfig()
-      settings = config
-      intervalMs = config.pollIntervalMs
-      poller = createPoller(() => stats.reload(), {
-        intervalMs: config.pollIntervalMs,
-        enabled: config.pollEnabled,
-      })
-      polling = poller.running
-    } catch (error) {
-      settingsError = error instanceof Error ? error.message : String(error)
-    }
-  })
-
-  onDestroy(() => poller?.stop())
-
-  function togglePolling(): void {
-    poller?.toggle()
-    polling = poller?.running ?? false
-  }
-
-  function changeInterval(event: Event): void {
-    const ms = Number((event.currentTarget as HTMLSelectElement).value)
-    intervalMs = ms
-    poller?.setIntervalMs(ms)
-  }
+  // First match wins, so the more specific patterns come first.
+  let runSearches = $derived(matchRoute('/runs/:id/searches', $path))
+  let runDetail = $derived(matchRoute('/runs/:id', $path))
+  let serp = $derived(matchRoute('/searches/:id', $path))
+  let scrape = $derived(matchRoute('/scrapes/:id', $path))
+  let runsList = $derived(matchRoute('/runs', $path) ?? matchRoute('/', $path))
 </script>
 
+<header>
+  <a href="/runs" data-testid="nav-runs">Observability UI</a>
+</header>
+
 <main>
-  <h1>Observability UI</h1>
-  <p>Read-only inspection of runs, scrapes, memory, jobs, caches and logs.</p>
-
-  <section>
-    <h2>Settings</h2>
-    {#if settingsError}
-      <p data-testid="settings-error">Could not load settings: {settingsError}</p>
-    {:else if settings}
-      <p data-testid="settings">
-        poll interval {settings.pollIntervalMs}ms · polling
-        {settings.pollEnabled ? 'on' : 'off'} by default · projection cap
-        {settings.projectionSampleCap}
-      </p>
-    {:else}
-      <p>Loading settings…</p>
-    {/if}
-  </section>
-
-  <section>
-    <h2>Live refresh</h2>
-    <button type="button" data-testid="toggle-polling" onclick={togglePolling} disabled={!poller}>
-      {polling ? 'Stop polling' : 'Start polling'}
-    </button>
-    <label>
-      Interval
-      <select data-testid="interval" value={intervalMs} onchange={changeInterval} disabled={!poller}>
-        {#each intervalChoices as choice (choice)}
-          <option value={choice}>{choice}ms</option>
-        {/each}
-      </select>
-    </label>
-    <button type="button" data-testid="reload" onclick={() => stats.reload()}>Reload now</button>
-  </section>
-
-  <section>
-    <h2>/api/stats</h2>
-    {#if $stats.loading && !$stats.data}
-      <p data-testid="stats-loading">Loading…</p>
-    {/if}
-    {#if $stats.error}
-      <p data-testid="stats-error">{$stats.error.message}</p>
-    {/if}
-    {#if $stats.data}
-      <pre data-testid="stats">{JSON.stringify($stats.data, null, 2)}</pre>
-    {/if}
-  </section>
+  {#if runSearches}
+    <SearchesList runId={runSearches.id} />
+  {:else if runDetail}
+    <RunDetail id={runDetail.id} />
+  {:else if serp}
+    <SerpViewer id={serp.id} />
+  {:else if scrape}
+    <ScrapeDetail id={scrape.id} />
+  {:else if runsList}
+    <RunsList />
+  {:else}
+    <section data-testid="not-found">
+      <h1>Not found</h1>
+      <p>No view is registered for {$path}.</p>
+      <p><a href="/runs" data-testid="not-found-home">Back to runs</a></p>
+    </section>
+  {/if}
 </main>

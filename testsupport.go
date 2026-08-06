@@ -95,10 +95,11 @@ func (e *testEnv) Seed(ctx context.Context) error { return seedTestData(ctx, e.S
 
 func seedTestData(ctx context.Context, store *Store) error {
 	const (
-		runID    = "00000000-0000-7000-8000-000000000001"
-		searchID = "00000000-0000-7000-8000-000000000002"
-		url1ID   = "00000000-0000-7000-8000-000000000003"
-		url2ID   = "00000000-0000-7000-8000-000000000004"
+		runID     = "00000000-0000-7000-8000-000000000001"
+		searchID  = "00000000-0000-7000-8000-000000000002"
+		url1ID    = "00000000-0000-7000-8000-000000000003"
+		url2ID    = "00000000-0000-7000-8000-000000000004"
+		search2ID = "00000000-0000-7000-8000-00000000000c"
 	)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	stmts := []struct {
@@ -112,6 +113,11 @@ func seedTestData(ctx context.Context, store *Store) error {
 			[]any{searchID, runID, "fixture term", "google", "typed", "https://www.google.com/search?q=fixture", 200, 2, 42, now}},
 		{`INSERT INTO search_raw (id, search_id, html, byte_size, created_at) VALUES (?, ?, ?, ?, ?)`,
 			[]any{"00000000-0000-7000-8000-000000000005", searchID, "<html><body>fixture SERP</body></html>", 38, now}},
+		// A second search that was blocked and stored no SERP, so the views have
+		// both the error state and the "no raw HTML" 404 to render.
+		{`INSERT INTO searches (id, run_id, term, engine, search_mode, http_status, blocked, anchor_count, error, duration_ms, created_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[]any{search2ID, runID, "fixture term", "bing", "direct", 429, 1, 0, "challenged by engine", 91, now}},
 		{`INSERT INTO urls (id, url, domain, first_seen_at, created_at) VALUES (?, ?, ?, ?, ?)`,
 			[]any{url1ID, "https://example.com/fixture-one", "example.com", now, now}},
 		{`INSERT INTO urls (id, url, domain, first_seen_at, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -120,11 +126,18 @@ func seedTestData(ctx context.Context, store *Store) error {
 			[]any{"00000000-0000-7000-8000-000000000006", searchID, url1ID, 1, now}},
 		{`INSERT INTO search_urls (id, search_id, url_id, rank, created_at) VALUES (?, ?, ?, ?, ?)`,
 			[]any{"00000000-0000-7000-8000-000000000007", searchID, url2ID, 2, now}},
-		{`INSERT INTO scrape_cache (id, url, run_id, http_status, content_type, fetched_with, title, raw_html, clean_html, text_content, images, content_hash, tier, fetched_at, created_at, updated_at)
-		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		{`INSERT INTO scrape_cache (id, url, run_id, http_status, content_type, fetched_with, title, raw_html, clean_html, text_content, images, content_hash, etag, last_modified, tier, hit_count, expires_at, fetched_at, created_at, updated_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			[]any{"00000000-0000-7000-8000-000000000008", "https://example.com/fixture-one", runID, 200, "text/html",
 				"http", "Fixture One", "<html><body><h1>Fixture One</h1></body></html>", "<h1>Fixture One</h1>",
-				"Fixture One", "[]", "fixturehash", tierShort, now, now, now}},
+				"Fixture One", `[{"url":"https://example.com/one.png","alt":"Fixture image","width":320,"height":200}]`,
+				"fixturehash", `W/"fixture-etag"`, "Wed, 05 Aug 2026 10:00:00 GMT", tierShort, 3, now, now, now, now}},
+		// A failed scrape with no images and no content, for the graceful-empty
+		// and error states.
+		{`INSERT INTO scrape_cache (id, url, run_id, http_status, fetched_with, robots_allowed, error, tier, hit_count, fetched_at, created_at, updated_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[]any{"00000000-0000-7000-8000-00000000000d", "https://example.org/fixture-two", runID, 404,
+				"http", 0, "not found", tierShort, 0, now, now, now}},
 		{`INSERT INTO memory_facts (id, text, source_url, volatility, tier, fetched_at, created_at, updated_at)
 		  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			[]any{"00000000-0000-7000-8000-000000000009", "The fixture page says Fixture One.",

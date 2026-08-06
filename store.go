@@ -413,6 +413,17 @@ type ScrapeDetail struct {
 	DurationMS    int64      `json:"duration_ms"`
 	CreatedAt     string     `json:"created_at"`
 	Images        []ImageRow `json:"images,omitempty"`
+
+	// Cache identity and tiering, read straight off the scrape_cache row. The
+	// observability UI shows these to explain why a page was or was not
+	// re-fetched; nothing else reads them.
+	ContentHash  string `json:"content_hash,omitempty"`
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"last_modified,omitempty"`
+	Tier         string `json:"tier,omitempty"`
+	HitCount     int    `json:"hit_count"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	FetchedAt    string `json:"fetched_at,omitempty"`
 }
 
 type ImageRow struct {

@@ -186,15 +186,22 @@ func (s *Store) GetScrape(ctx context.Context, scrapeID string, includeRaw bool)
 	var robots int
 	var status, dur sql.NullInt64
 	var runID, ct, fw, title, clean, text, raw, imgs, errStr sql.NullString
+	var hash, etag, lastMod, expires sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, url, run_id, http_status, content_type, fetched_with, robots_allowed,
-		        title, clean_html, text_content, raw_html, images, error, duration_ms, created_at
+		        title, clean_html, text_content, raw_html, images, error, duration_ms, created_at,
+		        content_hash, etag, last_modified, tier, hit_count, expires_at, fetched_at
 		   FROM scrape_cache WHERE id = ?`, scrapeID).
 		Scan(&d.ID, &d.URL, &runID, &status, &ct, &fw, &robots, &title, &clean, &text, &raw,
-			&imgs, &errStr, &dur, &d.CreatedAt)
+			&imgs, &errStr, &dur, &d.CreatedAt,
+			&hash, &etag, &lastMod, &d.Tier, &d.HitCount, &expires, &d.FetchedAt)
 	if err != nil {
 		return nil, err
 	}
+	d.ContentHash = hash.String
+	d.ETag = etag.String
+	d.LastModified = lastMod.String
+	d.ExpiresAt = expires.String
 	d.RunID = runID.String
 	d.HTTPStatus = int(status.Int64)
 	d.ContentType = ct.String

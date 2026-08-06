@@ -50,3 +50,16 @@ export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T>
 
   return (await response.json()) as T
 }
+
+/**
+ * GET a path as text. Not every read endpoint returns JSON — stored SERP HTML
+ * is served as text/html — and that content is untrusted, so callers must
+ * render it in a sandboxed frame or as escaped source, never inject it.
+ */
+export async function getText(path: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(apiUrl(path), { method: 'GET', signal })
+  if (!response.ok) {
+    throw new ApiError(`GET ${path} failed: ${response.statusText}`, response.status, path)
+  }
+  return await response.text()
+}
