@@ -1,6 +1,6 @@
 # Plan: Observability & Data-Inspection UI
 
-> Created: 2026-08-05 | Last Updated: 2026-08-06
+> Created: 2026-08-05 | Last Updated: 2026-08-06 | **Complete: T001–T027 all `[x]`**
 
 A web UI, served by the existing `-mode serve` listener, for inspecting
 everything the harvester stores and does: runs, per-engine searches and their raw
@@ -135,7 +135,7 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Documentation & Verification
 
-- [ ] T023: README refresh (final UI, build, embedded serving) + end-to-end verification — [T023_readme_refresh_verification.md](T023_readme_refresh_verification.md)
+- [x] T023: README refresh (final UI, build, embedded serving) + end-to-end verification — [T023_readme_refresh_verification.md](T023_readme_refresh_verification.md)
 
 ## Implementation Order & Phases
 

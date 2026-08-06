@@ -281,7 +281,10 @@ func defaultConfig() Config {
 			SnippetChars:      2000,
 		},
 		Server: ServerConfig{
-			Addr:         "0.0.0.0:8081",
+			// Must match config.toml and the SPA's dev proxy target
+			// (web/vite.config.ts): with no config file present this default is
+			// the listener the dev server proxies to.
+			Addr:         "0.0.0.0:8082",
 			ReadTimeout:  Duration{30 * time.Second},
 			WriteTimeout: Duration{180 * time.Second},
 		},
