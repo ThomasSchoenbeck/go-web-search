@@ -87,6 +87,19 @@ func newID() string {
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+// clampPage bounds a paginated listing: a limit in [1,500] defaulting to 50,
+// and a non-negative offset. Shared by the browse endpoints so an unset or
+// hostile limit can never ask for the whole table.
+func clampPage(limit, offset int) (int, int) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
 // StartRun records a run and returns its id.
 func (s *Store) StartRun(ctx context.Context, mode, artifactDir string) (string, error) {
 	id := newID()

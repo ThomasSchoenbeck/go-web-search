@@ -84,7 +84,7 @@ func newTestEnv(dir string) (*testEnv, error) {
 // Server builds an apiServer over the throwaway stores, with no browser session
 // — every observability route is read-only, so nothing here needs Chrome.
 func (e *testEnv) Server() *apiServer {
-	return newAPIServer(e.Cfg, newHarvester(e.Cfg, e.Store, e.Art.Log, nil))
+	return newAPIServer(e.Cfg, newHarvester(e.Cfg, e.Store, e.Art.Log, nil), e.Logs)
 }
 
 // Seed writes a small, fully deterministic dataset: one finished run, one
@@ -93,6 +93,10 @@ func (e *testEnv) Server() *apiServer {
 // SQL rather than through the pipeline so seeding needs neither Chrome nor a
 // model endpoint.
 func (e *testEnv) Seed(ctx context.Context) error { return seedTestData(ctx, e.Store) }
+
+// SeedLogs fills the log database, which seedTestData does not touch: the two
+// are separate files, and the logs viewer reads only the second one.
+func (e *testEnv) SeedLogs(ctx context.Context) error { return seedTestLogs(ctx, e.Logs) }
 
 func seedTestData(ctx context.Context, store *Store) error {
 	const (
@@ -103,6 +107,9 @@ func seedTestData(ctx context.Context, store *Store) error {
 		search2ID = "00000000-0000-7000-8000-00000000000c"
 	)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// A fixed distance into the past, so rows that need an age (a finished job,
+	// a cache entry fetched before this moment) have a deterministic one.
+	earlier := time.Now().UTC().Add(-90 * time.Second).Format(time.RFC3339Nano)
 	stmts := []struct {
 		query string
 		args  []any
@@ -147,12 +154,63 @@ func seedTestData(ctx context.Context, store *Store) error {
 		  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			[]any{"00000000-0000-7000-8000-00000000000a", "fixture term", "fixture term",
 				`["https://example.com/fixture-one"]`, tierShort, now, now, now}},
+		// A second cached query at a promoted tier, so the cache browser's tier
+		// filter has something to separate.
+		{`INSERT INTO search_cache (id, query_norm, query, results, tier, hit_count, expires_at, fetched_at, created_at, updated_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[]any{"00000000-0000-7000-8000-000000000011", "fixture archive", "Fixture Archive",
+				`["https://example.org/fixture-two","https://example.net/fixture-archive"]`, tierLong, 7, now, earlier, earlier, now}},
+		// A cached page from no particular run, at a promoted tier: the scrape
+		// cache outlives the run that filled it, and the browser must show that.
+		{`INSERT INTO scrape_cache (id, url, http_status, content_type, fetched_with, robots_allowed, title, clean_html, text_content, content_hash, tier, hit_count, expires_at, fetched_at, created_at, updated_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[]any{"00000000-0000-7000-8000-000000000012", "https://example.net/fixture-archive", 200, "text/html",
+				"http", 1, "Fixture Archive", "<h1>Fixture Archive</h1>", "Fixture Archive",
+				"archivehash", tierLong, 5, now, earlier, earlier, now}},
 		{`INSERT INTO jobs (id, type, payload, status, run_after, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			[]any{"00000000-0000-7000-8000-00000000000b", jobTypeDistill, "{}", "pending", now, now, now}},
+		// One job per remaining status, so the monitor's breakdown and its
+		// status/type filters have every case to render.
+		{`INSERT INTO jobs (id, type, payload, status, attempts, run_after, created_at, updated_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			[]any{"00000000-0000-7000-8000-00000000000e", jobTypeEmbed, `{"owner_kind":"memory"}`, jobFailed, 3, now, earlier, now}},
+		{`INSERT INTO jobs (id, type, payload, status, run_after, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			[]any{"00000000-0000-7000-8000-00000000000f", jobTypeEmbed, `{"owner_kind":"search"}`, jobDone, earlier, earlier, now}},
+		{`INSERT INTO jobs (id, type, payload, status, attempts, run_after, locked_at, created_at, updated_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[]any{"00000000-0000-7000-8000-000000000010", jobTypeCleanup, "", jobRunning, 1, now, now, earlier, now}},
 	}
 	for _, s := range stmts {
 		if _, err := store.db.ExecContext(ctx, s.query, s.args...); err != nil {
 			return fmt.Errorf("seeding: %w", err)
+		}
+	}
+	return nil
+}
+
+// seedTestLogs writes fixture lines straight into the log database rather than
+// through LogStore.Write: that path is an asynchronous batching goroutine, and
+// a test that has to wait out a flush interval before it can assert is a flaky
+// test. Levels, sources and the presence of a run id all vary, so every filter
+// the logs endpoint offers has something to select on.
+func seedTestLogs(ctx context.Context, logs *LogStore) error {
+	const runID = "00000000-0000-7000-8000-000000000001"
+	base := time.Now().UTC().Add(-time.Minute)
+	lines := []struct {
+		id, runID, level, source, message string
+	}{
+		{"00000000-0000-7000-8000-000000000013", runID, "info", "harvester", "fixture run started"},
+		{"00000000-0000-7000-8000-000000000014", runID, "notice", "harvester", "NOTE: fixture profile is new"},
+		{"00000000-0000-7000-8000-000000000015", runID, "warn", "scraper", "WARNING: fixture page was slow"},
+		// No run id: lines written outside a run must still be listable.
+		{"00000000-0000-7000-8000-000000000016", "", "error", "scraper", "ERROR: fixture fetch failed"},
+	}
+	for i, l := range lines {
+		at := base.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
+		if _, err := logs.db.ExecContext(ctx,
+			`INSERT INTO logs (id, run_id, level, source, message, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			l.id, nullable(l.runID), l.level, l.source, l.message, at); err != nil {
+			return fmt.Errorf("seeding logs: %w", err)
 		}
 	}
 	return nil
@@ -226,7 +284,7 @@ func seedVectors(ctx context.Context, store *Store) error {
 // The Playwright harness needs a real listener but only exercises read-only
 // routes, and leaving the background systems out keeps startup fast and keeps
 // e2e runs from depending on a reachable LLM endpoint.
-func testServeMode(cfg Config, art *artifacts, store *Store, stop context.Context) error {
+func testServeMode(cfg Config, art *artifacts, store *Store, logs *LogStore, stop context.Context) error {
 	// The Playwright harness sets this so the views have something to render.
 	if os.Getenv("HARVESTER_TEST_SEED") == "1" {
 		ctx := context.Background()
@@ -236,10 +294,13 @@ func testServeMode(cfg Config, art *artifacts, store *Store, stop context.Contex
 		if err := seedVectors(ctx, store); err != nil {
 			return err
 		}
+		if err := seedTestLogs(ctx, logs); err != nil {
+			return err
+		}
 		art.Log.Printf("testserve seeded fixture data")
 	}
 
-	srv := newAPIServer(cfg, newHarvester(cfg, store, art.Log, nil))
+	srv := newAPIServer(cfg, newHarvester(cfg, store, art.Log, nil), logs)
 	// No model endpoint is reachable in a test run, so the explorer embeds with
 	// the deterministic stub instead.
 	srv.embed = stubEmbedder{}

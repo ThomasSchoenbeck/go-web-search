@@ -13,6 +13,11 @@
   import FactsBrowser from './views/FactsBrowser.svelte'
   import FactDetail from './views/FactDetail.svelte'
   import SemanticExplorer from './views/SemanticExplorer.svelte'
+  import JobsMonitor from './views/JobsMonitor.svelte'
+  import SearchCacheBrowser from './views/SearchCacheBrowser.svelte'
+  import ScrapeCacheBrowser from './views/ScrapeCacheBrowser.svelte'
+  import LogsViewer from './views/LogsViewer.svelte'
+  import StatsDashboard from './views/StatsDashboard.svelte'
 
   onMount(() => startRouter())
 
@@ -48,6 +53,16 @@
     <FactsBrowser />
   {:else if route?.name === 'explore'}
     <SemanticExplorer query={exploreQuery} k={exploreK} />
+  {:else if route?.name === 'jobs'}
+    <JobsMonitor />
+  {:else if route?.name === 'search-cache'}
+    <SearchCacheBrowser />
+  {:else if route?.name === 'scrape-cache'}
+    <ScrapeCacheBrowser />
+  {:else if route?.name === 'logs'}
+    <LogsViewer />
+  {:else if route?.name === 'stats'}
+    <StatsDashboard />
   {:else if route?.name === 'runs'}
     <RunsList />
   {:else}

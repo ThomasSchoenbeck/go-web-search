@@ -55,6 +55,10 @@ type ObservabilityConfig struct {
 	// find thousands of URLs, each dragging its scrape and facts into the
 	// response; past this many the graph is truncated and says so.
 	CausalityMaxURLs int `toml:"causality_max_urls"`
+	// JobTimingSample bounds how many finished jobs /api/stats averages a
+	// completion time over. The whole history would be an unbounded scan for a
+	// single number; 0 skips the timing entirely.
+	JobTimingSample int `toml:"job_timing_sample"`
 }
 
 // RetentionConfig governs shrinking the database beyond the tier expiry: one
@@ -328,6 +332,7 @@ func defaultConfig() Config {
 			PollEnabled:         false,
 			ProjectionSampleCap: 2000,
 			CausalityMaxURLs:    200,
+			JobTimingSample:     200,
 		},
 	}
 }

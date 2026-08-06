@@ -1,6 +1,6 @@
 # Plan: Observability & Data-Inspection UI
 
-> Created: 2026-08-05 | Last Updated: 2026-08-05
+> Created: 2026-08-05 | Last Updated: 2026-08-06
 
 A web UI, served by the existing `-mode serve` listener, for inspecting
 everything the harvester stores and does: runs, per-engine searches and their raw
@@ -120,13 +120,13 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Jobs, Caches, Logs & Stats
 
-- [ ] T014: NEW endpoint — jobs list with status/type filters + pagination over the `jobs` table — [T014_jobs_list_endpoint.md](T014_jobs_list_endpoint.md)
-- [ ] T015: Jobs queue monitor view (pending/running/failed, attempts, backoff; polling) — [T015_jobs_monitor_view.md](T015_jobs_monitor_view.md)
-- [ ] T016: NEW endpoints — `search_cache` + `scrape_cache` browsers (tier/expiry/hit_count, filters, pagination) — [T016_cache_browser_endpoints.md](T016_cache_browser_endpoints.md)
-- [ ] T017: Cache browser views (search_cache + scrape_cache) — [T017_cache_browser_views.md](T017_cache_browser_views.md)
-- [ ] T018: NEW endpoint — logs query over the separate log DB (run_id/level/source filters, pagination) + wire log-read into the server — [T018_logs_query_endpoint.md](T018_logs_query_endpoint.md)
-- [ ] T019: Logs viewer view (filters + polling tail) — [T019_logs_viewer_view.md](T019_logs_viewer_view.md)
-- [ ] T020: Extend `/api/stats` with model+dim + migration state; Stats dashboard view — [T020_stats_dashboard.md](T020_stats_dashboard.md)
+- [x] T014: NEW endpoint — jobs list with status/type filters + pagination over the `jobs` table — [T014_jobs_list_endpoint.md](T014_jobs_list_endpoint.md)
+- [x] T015: Jobs queue monitor view (pending/running/failed, attempts, backoff; polling) — [T015_jobs_monitor_view.md](T015_jobs_monitor_view.md)
+- [x] T016: NEW endpoints — `search_cache` + `scrape_cache` browsers (tier/expiry/hit_count, filters, pagination) — [T016_cache_browser_endpoints.md](T016_cache_browser_endpoints.md)
+- [x] T017: Cache browser views (search_cache + scrape_cache) — [T017_cache_browser_views.md](T017_cache_browser_views.md)
+- [x] T018: NEW endpoint — logs query over the separate log DB (run_id/level/source filters, pagination) + wire log-read into the server — [T018_logs_query_endpoint.md](T018_logs_query_endpoint.md)
+- [x] T019: Logs viewer view (filters + polling tail) — [T019_logs_viewer_view.md](T019_logs_viewer_view.md)
+- [x] T020: Extend `/api/stats` with model+dim + migration state; Stats dashboard view — [T020_stats_dashboard.md](T020_stats_dashboard.md)
 
 ### Feature: Embeddings 2-D Projection (later phase)
 
@@ -214,6 +214,13 @@ registers its entry as it lands rather than leaving views URL-only (T006)
   holds only the main `Store`, not the log DB handle. T018 adds a read query over
   the separate log database AND wires that read access into the server — flag this
   as touching serve-mode wiring (`main.go` / `newAPIServer`), not just `server.go`.
+  **Landed as** a `logs *LogStore` parameter on `newAPIServer`/`serveMode`/
+  `serveWithBrowser` plus both test entry points, and `GET /api/logs`.
+- **The log database carries the test server's own lines (found in T018/T019).**
+  `dbLogWriter` tees the artifacts logger into the log DB, so a `-mode testserve`
+  process writes its startup lines there under *its own* run id, alongside the
+  fixtures. This is the `runs`-count trap again: **never assert a total log-line
+  count in e2e** — pivot on the seeded run id or on fixture message text.
 - **Provenance — full scope (T009/T010 + T025/T026 + a link from T011).** Confirmed
   to cover all three shapes. (1) **URL pivot** (T009 endpoint, T010 view): backward
   via `search_urls` (search_id, url_id, rank) joined to `searches`; forward via
@@ -255,6 +262,13 @@ registers its entry as it lands rather than leaving views URL-only (T006)
   that crosses into non-read-only territory, present hit *counts* and tier
   distributions instead of a computed rate — resolve this in the task before
   building. Job timings derive from `created_at`/`updated_at`/`locked_at`/`attempts`.
+  **RESOLVED in T020: option (a), counts not rates.** A miss leaves nothing
+  behind to count, and adding lookup counters would be a write on every cache
+  read — outside read-only v1. `/api/stats` carries rows, tier distribution,
+  expired, rows-reused and total-hits per cache, and the dashboard states why
+  there is no rate rather than leaving the absence unexplained. Job timing is
+  averaged over the most recent `observability.job_timing_sample` finished jobs
+  (default 200; 0 disables), because the whole history is an unbounded scan.
 - **Dev vs. embedded serving (T002/T003).** In development the SPA runs under the
   Vite dev server proxied to the serve listener; in production the built `dist/` is
   embedded via `go:embed` and served directly, with an SPA fallback so client-side
@@ -303,13 +317,18 @@ registers its entry as it lands rather than leaving views URL-only (T006)
   **Every later view task must register its route** — in the match chain in
   `web/src/App.svelte` until T027 lands, in the shared route definition after —
   add its navigation entry (T027) and its `data-testid` hooks. No view task
-  hand-rolls fetching, formatting or routing.
+  hand-rolls fetching, formatting or routing. **Phase 5 added a fourth shared
+  piece:** `web/src/components/PollControls.svelte` (T015), which owns the
+  poller for both live views — seeded from `/api/ui-config`, with the interval
+  dropdown, the on/off toggle and stop-on-unmount in one place.
 - **The e2e seed is a shared, growing fixture.** `seedTestData` in
   `testsupport.go` (T024) writes the fixture dataset every Playwright run reads,
   and `web/tests/e2e/fixtures-data.ts` exports the fixed ids. Tasks that add a
   view over data the seed does not yet contain must extend it there rather than
-  seeding per-spec. **Known gap: the seed writes only to the main DB — the log
-  database has no fixture rows at all**, which T018/T019 must add.
+  seeding per-spec. The log database was a known gap here until T018 added
+  `seedTestLogs` — a **second** seeding function, because the log DB is a
+  separate file with its own handle. Phase 5 also grew the main seed: jobs
+  covering every status, and a long-tier row in each cache.
 - **Tone/convention parity.** Task files follow the `plans/cache-memory/`
   conventions exactly: the frontmatter block, the Description/Goal/How to
   Verify/Files to Touch/Dependencies sections, `[NEW]` markers on new files,

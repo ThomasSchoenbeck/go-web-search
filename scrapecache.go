@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -263,6 +264,89 @@ func (s *Store) ScrapeSizesByURL(ctx context.Context, rawURL string) (*ScrapeSiz
 	z.HTTPStatus = int(status.Int64)
 	z.FetchedWith = fw.String
 	return &z, true, nil
+}
+
+// ScrapeCacheSummary is one cached page as the browser view sees it: identity,
+// cache metadata and body sizes. The bodies themselves stay behind
+// /api/scrapes/{id} — a listing that carried them would be enormous.
+type ScrapeCacheSummary struct {
+	ID            string `json:"id"`
+	URL           string `json:"url"`
+	HTTPStatus    int    `json:"http_status,omitempty"`
+	ContentType   string `json:"content_type,omitempty"`
+	FetchedWith   string `json:"fetched_with,omitempty"`
+	Title         string `json:"title,omitempty"`
+	RobotsAllowed bool   `json:"robots_allowed"`
+	Error         string `json:"error,omitempty"`
+	ContentHash   string `json:"content_hash,omitempty"`
+	Tier          string `json:"tier"`
+	HitCount      int    `json:"hit_count"`
+	TextChars     int    `json:"text_chars"`
+	CleanChars    int    `json:"clean_html_chars"`
+	RawChars      int    `json:"raw_html_chars"`
+	ExpiresAt     string `json:"expires_at,omitempty"`
+	FetchedAt     string `json:"fetched_at"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+// ListScrapeCache returns cached pages newest-fetched-first, optionally
+// filtered by tier and by a substring of the URL (which also matches a domain).
+// limit is clamped to [1,500]; 0 uses the default of 50.
+func (s *Store) ListScrapeCache(ctx context.Context, tier, q string, limit, offset int) ([]ScrapeCacheSummary, error) {
+	limit, offset = clampPage(limit, offset)
+	query := `SELECT id, url, http_status, content_type, fetched_with, title, robots_allowed, error,
+	                 content_hash, tier, hit_count,
+	                 COALESCE(length(text_content), 0), COALESCE(length(clean_html), 0),
+	                 COALESCE(length(raw_html), 0),
+	                 expires_at, fetched_at, created_at, updated_at
+	            FROM scrape_cache`
+	var (
+		where []string
+		args  []any
+	)
+	if tier != "" {
+		where = append(where, `tier = ?`)
+		args = append(args, tier)
+	}
+	if q != "" {
+		where = append(where, `url LIKE ?`)
+		args = append(args, "%"+q+"%")
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ScrapeCacheSummary
+	for rows.Next() {
+		var e ScrapeCacheSummary
+		var status sql.NullInt64
+		var robots int
+		var ct, fw, title, errStr, hash, exp sql.NullString
+		if err := rows.Scan(&e.ID, &e.URL, &status, &ct, &fw, &title, &robots, &errStr,
+			&hash, &e.Tier, &e.HitCount, &e.TextChars, &e.CleanChars, &e.RawChars,
+			&exp, &e.FetchedAt, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		e.HTTPStatus = int(status.Int64)
+		e.ContentType = ct.String
+		e.FetchedWith = fw.String
+		e.Title = title.String
+		e.RobotsAllowed = robots == 1
+		e.Error = errStr.String
+		e.ContentHash = hash.String
+		e.ExpiresAt = exp.String
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // RunScrapeIDs lists the scrape ids attributed to a run.

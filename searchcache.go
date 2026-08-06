@@ -166,6 +166,73 @@ func (s *Store) touchSearchCache(ctx context.Context, cfg TierConfig, e *SearchC
 	return err
 }
 
+// ---- read path, for the observability UI ----
+
+// SearchCacheSummary is one cached query as the browser view sees it. The
+// stored results blob is summarised (how many URLs, how large) rather than
+// served: the browser lists cache metadata, it is not a results API.
+type SearchCacheSummary struct {
+	ID           string `json:"id"`
+	Query        string `json:"query"`
+	QueryNorm    string `json:"query_norm"`
+	Tier         string `json:"tier"`
+	HitCount     int    `json:"hit_count"`
+	ResultCount  int    `json:"result_count"`
+	ResultsChars int    `json:"results_chars"`
+	ExpiresAt    string `json:"expires_at,omitempty"`
+	FetchedAt    string `json:"fetched_at"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+// ListSearchCache returns cached queries newest-fetched-first, optionally
+// filtered by tier and by a substring of the normalized query. limit is clamped
+// to [1,500]; 0 uses the default of 50.
+func (s *Store) ListSearchCache(ctx context.Context, tier, q string, limit, offset int) ([]SearchCacheSummary, error) {
+	limit, offset = clampPage(limit, offset)
+	query := `SELECT id, query, query_norm, tier, hit_count, results, expires_at, fetched_at, created_at, updated_at
+	            FROM search_cache`
+	var (
+		where []string
+		args  []any
+	)
+	if tier != "" {
+		where = append(where, `tier = ?`)
+		args = append(args, tier)
+	}
+	if q != "" {
+		where = append(where, `query_norm LIKE ?`)
+		args = append(args, "%"+normalizeQuery(q)+"%")
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY fetched_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SearchCacheSummary
+	for rows.Next() {
+		var e SearchCacheSummary
+		var results string
+		var exp sql.NullString
+		if err := rows.Scan(&e.ID, &e.Query, &e.QueryNorm, &e.Tier, &e.HitCount, &results,
+			&exp, &e.FetchedAt, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		e.ExpiresAt = exp.String
+		e.ResultCount = countCachedURLs(results)
+		e.ResultsChars = len(results)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // freshEnough reports whether a row has not expired and, when maxAge > 0, was
 // fetched within maxAge. It is shared by the cache lookups.
 func freshEnough(expiresAt, fetchedAt string, maxAge time.Duration) bool {

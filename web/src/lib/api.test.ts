@@ -17,6 +17,17 @@ const stats: Stats = {
   scrape_text_max_chars: 11,
   scrape_raw_avg_chars: 46,
   scrape_raw_max_chars: 46,
+  vector_migration_in_progress: false,
+  search_cache_stats: { rows: 1, total_hits: 0, rows_with_hits: 0, expired: 0, tiers: { short: 1 } },
+  scrape_cache_stats: { rows: 1, total_hits: 3, rows_with_hits: 1, expired: 0, tiers: { short: 1 } },
+  jobs: {
+    by_status: { pending: 1, running: 0, done: 0, failed: 0 },
+    by_type: { distill: 1 },
+    retried: 0,
+    max_attempts: 0,
+    completed_sampled: 0,
+    avg_completion_ms: 0,
+  },
 }
 
 describe('createResource', () => {

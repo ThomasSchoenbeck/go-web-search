@@ -49,13 +49,29 @@ text/URL filters and pagination, backed by new store read queries.
 - Empty caches return empty lists; filters and paging work.
 - Both routes are registered in `newAPIServer` and behind the shared `/api` middleware (`withAuth`, a no-op when `api_key` is unset — edge auth).
 
+## Note added during implementation
+
+- The routes are `GET /api/cache/searches` and `GET /api/cache/scrapes`, both
+  replying `{count, entries}`.
+- The search-cache summary reports `result_count` (URLs in the stored blob) and
+  `results_chars` (its size) instead of the blob. Its text filter runs against
+  `query_norm` through `normalizeQuery`, so it matches the way the cache key
+  does — case- and whitespace-insensitive.
+- The scrape-cache summary reports `text_chars`/`clean_html_chars`/
+  `raw_html_chars` computed in SQL, so no body is ever read into memory.
+- Both use the shared `clampPage` bound added in `store.go` (T014).
+- `seedTestData` gained a long-tier cached query and a long-tier cached page
+  attached to no run, so the tier filters have something to separate. The new
+  page is not attached to the seeded run, so the run views' counts are unmoved.
+
 ## Files to Touch
 
 - `searchcache.go`
 - `scrapecache.go`
 - `server.go`
-- `searchcache_test.go`
-- `scrapecache_test.go`
+- `testsupport.go` — long-tier fixtures for both caches
+- `searchcache_test.go` [NEW]
+- `scrapecache_test.go` [NEW]
 
 ## Dependencies
 

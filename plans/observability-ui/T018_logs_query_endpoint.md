@@ -66,6 +66,25 @@ Also: `seedTestData` currently writes only to the **main** database, so the log
 DB is empty in every test run. This task (or T019) must seed log rows there, or
 the logs viewer has nothing to render in e2e and the filters cannot be exercised.
 
+## Note added during implementation
+
+- The wiring is a `logs *LogStore` parameter threaded through
+  `newAPIServer` → `serveMode` → `serveWithBrowser` → `realMain`, plus both test
+  entry points (`testEnv.Server`, `testServeMode`). `apiServer` holds it as a
+  field beside `h`; the main `Store` is untouched.
+- The route is `GET /api/logs`, replying `{count, entries}` newest-first, with
+  `run_id`/`level`/`source` filters and the shared `clampPage` bound. The order
+  is `created_at DESC, id DESC` — ids are UUIDv7, so they break same-timestamp
+  ties in creation order rather than randomly.
+- `seedTestLogs` writes fixture lines with plain SQL rather than through
+  `LogStore.Write`: that path is an asynchronous batching goroutine, and a test
+  that must wait out a flush interval before it can assert is a flaky test. One
+  test does exercise the write path, by polling until the line lands.
+- **Landmine for later specs: the test server logs its own startup into the same
+  log database**, under its own run id — the same trap as the `runs` table. The
+  fixtures are never the only rows, so no e2e assertion may use a total line
+  count; pivot on the seeded run id or on fixture text instead.
+
 ## Files to Touch
 
 - `logstore.go`

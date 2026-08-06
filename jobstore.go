@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -107,6 +109,103 @@ func (s *Store) FailJob(ctx context.Context, id string) error {
 		`UPDATE jobs SET status = 'failed', locked_at = NULL, updated_at = ? WHERE id = ?`,
 		nowRFC3339(), id)
 	return err
+}
+
+// ---- read path, for the observability UI ----
+
+// JobSummary is one queue row as the monitor sees it. Payload stays an opaque
+// string: it is arbitrary JSON written by whichever enqueuer produced the job,
+// so it is passed through for display rather than reinterpreted here.
+type JobSummary struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Payload   string `json:"payload,omitempty"`
+	Status    string `json:"status"`
+	Attempts  int    `json:"attempts"`
+	RunAfter  string `json:"run_after,omitempty"`
+	LockedAt  string `json:"locked_at,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// JobsPage is the jobs endpoint's payload. Counts cover the whole queue, not
+// the page, so filtering the list does not distort the health summary.
+type JobsPage struct {
+	Jobs   []JobSummary   `json:"jobs"`
+	Counts map[string]int `json:"counts"`
+}
+
+// jobStatuses is every status a row can hold, in queue order. Used to give the
+// counts a stable shape so the monitor's breakdown does not gain and lose tiles
+// as the queue drains.
+var jobStatuses = []string{jobPending, jobRunning, jobDone, jobFailed}
+
+// ListJobs returns queue rows newest-first, optionally narrowed to one status
+// and/or type. limit is clamped to [1,500]; 0 uses the default of 50.
+func (s *Store) ListJobs(ctx context.Context, status, jobType string, limit, offset int) ([]JobSummary, error) {
+	limit, offset = clampPage(limit, offset)
+	query := `SELECT id, type, payload, status, attempts, run_after, locked_at, created_at, updated_at
+	            FROM jobs`
+	var (
+		where []string
+		args  []any
+	)
+	if status != "" {
+		where = append(where, `status = ?`)
+		args = append(args, status)
+	}
+	if jobType != "" {
+		where = append(where, `type = ?`)
+		args = append(args, jobType)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []JobSummary
+	for rows.Next() {
+		var j JobSummary
+		var locked sql.NullString
+		if err := rows.Scan(&j.ID, &j.Type, &j.Payload, &j.Status, &j.Attempts,
+			&j.RunAfter, &locked, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			return nil, err
+		}
+		j.LockedAt = locked.String
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// JobStatusCounts counts the whole queue by status. Every known status is
+// present, at zero when nothing holds it.
+func (s *Store) JobStatusCounts(ctx context.Context) (map[string]int, error) {
+	counts := map[string]int{}
+	for _, status := range jobStatuses {
+		counts[status] = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM jobs GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		counts[status] = n
+	}
+	return counts, rows.Err()
 }
 
 // ResetStaleJobs returns running jobs whose lock is older than the cutoff back

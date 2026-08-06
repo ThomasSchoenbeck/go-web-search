@@ -192,11 +192,11 @@ func realMain() error {
 	case "browse":
 		runErr = browseMode(cfg, art, userDataDir, stop)
 	case "serve":
-		runErr = serveWithBrowser(cfg, art, store, userDataDir, stop)
+		runErr = serveWithBrowser(cfg, art, store, logs, userDataDir, stop)
 	case "testserve":
 		// Browserless serve for the automated test harness (see testsupport.go).
 		// Point it at a throwaway directory with -data.
-		runErr = testServeMode(cfg, art, store, stop)
+		runErr = testServeMode(cfg, art, store, logs, stop)
 	default:
 		runErr = fmt.Errorf("unknown -mode %q (want browse, serve or testserve)", *mode)
 	}
@@ -262,7 +262,9 @@ func browseMode(cfg Config, art *artifacts, userDataDir string, stop context.Con
 }
 
 // serveWithBrowser launches Chrome once and serves REST + MCP on top of it.
-func serveWithBrowser(cfg Config, art *artifacts, store *Store, userDataDir string, stop context.Context) error {
+// logs is passed through untouched: the server only reads it, for the logs
+// endpoint, while the artifacts logger keeps writing to it.
+func serveWithBrowser(cfg Config, art *artifacts, store *Store, logs *LogStore, userDataDir string, stop context.Context) error {
 	s, err := launch(context.Background(), sessionOpts{
 		headless:    cfg.Browser.Headless,
 		noSandbox:   cfg.Browser.NoSandbox,
@@ -276,7 +278,7 @@ func serveWithBrowser(cfg Config, art *artifacts, store *Store, userDataDir stri
 	}
 	defer s.close()
 
-	return serveMode(cfg, art, newHarvester(cfg, store, art.Log, s), stop)
+	return serveMode(cfg, art, newHarvester(cfg, store, art.Log, s), logs, stop)
 }
 
 // waitOrStop pauses between queries, returning false if a shutdown signal

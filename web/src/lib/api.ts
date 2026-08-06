@@ -12,6 +12,32 @@ import { getJson, getText } from './request'
 
 export { ApiError } from './request'
 
+/**
+ * GET /api/stats (CacheStats in stats.go).
+ *
+ * Hit *counts*, not a rate: the schema records hit_count on the rows that
+ * exist and nothing about lookups that missed, so a rate is not derivable
+ * without writing new counters — which the read-only v1 does not do.
+ */
+export interface CacheStats {
+  rows: number
+  total_hits: number
+  rows_with_hits: number
+  expired: number
+  tiers: Record<string, number>
+}
+
+/** GET /api/stats (JobStats in stats.go). */
+export interface JobStats {
+  by_status: Record<string, number>
+  by_type: Record<string, number>
+  retried: number
+  max_attempts: number
+  oldest_pending_at?: string
+  completed_sampled: number
+  avg_completion_ms: number
+}
+
 /** GET /api/stats (StatsView in stats.go). */
 export interface Stats {
   runs: number
@@ -26,6 +52,14 @@ export interface Stats {
   scrape_text_max_chars: number
   scrape_raw_avg_chars: number
   scrape_raw_max_chars: number
+  embed_model?: string
+  embed_dim?: number
+  vector_table?: string
+  /** True while a re-embed runs, when the vector count is the old generation's. */
+  vector_migration_in_progress: boolean
+  search_cache_stats: CacheStats
+  scrape_cache_stats: CacheStats
+  jobs: JobStats
 }
 
 export interface ResourceState<T> {
@@ -343,6 +377,141 @@ export function exploreResource(query: string, k: number): Resource<ExploreResul
       neighbors: result.neighbors ?? [],
     })),
   )
+}
+
+/** GET /api/jobs (JobSummary in jobstore.go). */
+export interface JobSummary {
+  id: string
+  type: string
+  /** Arbitrary JSON written by whichever enqueuer produced the job. Display as text. */
+  payload?: string
+  status: string
+  attempts: number
+  run_after?: string
+  locked_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface JobsPage {
+  jobs: JobSummary[]
+  /** Whole-queue counts by status, so filtering the list does not distort them. */
+  counts: Record<string, number>
+}
+
+export interface JobsQuery {
+  status?: string
+  type?: string
+  limit: number
+  offset: number
+}
+
+export function jobsResource(query: JobsQuery): Resource<JobsPage> {
+  const params = new URLSearchParams()
+  if (query.status) params.set('status', query.status)
+  if (query.type) params.set('type', query.type)
+  params.set('limit', String(query.limit))
+  params.set('offset', String(query.offset))
+  return createResource(() =>
+    getJson<JobsPage>(`/api/jobs?${params}`).then((page) => ({
+      jobs: page.jobs ?? [],
+      counts: page.counts ?? {},
+    })),
+  )
+}
+
+/** GET /api/cache/searches (SearchCacheSummary in searchcache.go). */
+export interface SearchCacheEntry {
+  id: string
+  query: string
+  query_norm: string
+  tier: string
+  hit_count: number
+  result_count: number
+  results_chars: number
+  expires_at?: string
+  fetched_at: string
+  created_at: string
+  updated_at: string
+}
+
+/** GET /api/cache/scrapes (ScrapeCacheSummary in scrapecache.go). */
+export interface ScrapeCacheEntry {
+  id: string
+  url: string
+  http_status?: number
+  content_type?: string
+  fetched_with?: string
+  title?: string
+  robots_allowed: boolean
+  error?: string
+  content_hash?: string
+  tier: string
+  hit_count: number
+  text_chars: number
+  clean_html_chars: number
+  raw_html_chars: number
+  expires_at?: string
+  fetched_at: string
+  created_at: string
+  updated_at: string
+}
+
+/** `q` matches the cached query text for searches and the URL for scrapes. */
+export interface CacheQuery {
+  tier?: string
+  q?: string
+  limit: number
+  offset: number
+}
+
+function cacheParams(query: CacheQuery): URLSearchParams {
+  const params = new URLSearchParams()
+  if (query.tier) params.set('tier', query.tier)
+  if (query.q) params.set('q', query.q)
+  params.set('limit', String(query.limit))
+  params.set('offset', String(query.offset))
+  return params
+}
+
+function entriesOf<T>(path: string): Promise<T[]> {
+  return getJson<{ count: number; entries: T[] | null }>(path).then((body) => body.entries ?? [])
+}
+
+export function searchCacheResource(query: CacheQuery): Resource<SearchCacheEntry[]> {
+  return createResource(() => entriesOf<SearchCacheEntry>(`/api/cache/searches?${cacheParams(query)}`))
+}
+
+export function scrapeCacheResource(query: CacheQuery): Resource<ScrapeCacheEntry[]> {
+  return createResource(() => entriesOf<ScrapeCacheEntry>(`/api/cache/scrapes?${cacheParams(query)}`))
+}
+
+/** GET /api/logs (LogEntry in logstore.go). Reads the separate log database. */
+export interface LogEntry {
+  id: string
+  run_id?: string
+  level: string
+  source?: string
+  message: string
+  created_at: string
+}
+
+export interface LogsQuery {
+  run_id?: string
+  level?: string
+  source?: string
+  limit: number
+  offset: number
+}
+
+export function logsResource(query: LogsQuery): Resource<LogEntry[]> {
+  const params = new URLSearchParams()
+  if (query.run_id) params.set('run_id', query.run_id)
+  if (query.level) params.set('level', query.level)
+  if (query.source) params.set('source', query.source)
+  params.set('limit', String(query.limit))
+  params.set('offset', String(query.offset))
+  return createResource(() => entriesOf<LogEntry>(`/api/logs?${params}`))
 }
 
 export function runCausalityResource(runId: string): Resource<CausalityGraph> {

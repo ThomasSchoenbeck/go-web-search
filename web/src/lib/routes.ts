@@ -23,6 +23,11 @@ export type ViewName =
   | 'facts'
   | 'fact-detail'
   | 'explore'
+  | 'jobs'
+  | 'search-cache'
+  | 'scrape-cache'
+  | 'logs'
+  | 'stats'
 
 export interface RouteDef {
   pattern: string
@@ -42,6 +47,11 @@ export const routes: RouteDef[] = [
   { pattern: '/facts/:id', name: 'fact-detail', section: 'facts' },
   { pattern: '/facts', name: 'facts', section: 'facts' },
   { pattern: '/explore', name: 'explore', section: 'explore' },
+  { pattern: '/jobs', name: 'jobs', section: 'jobs' },
+  { pattern: '/cache/searches', name: 'search-cache', section: 'cache' },
+  { pattern: '/cache/scrapes', name: 'scrape-cache', section: 'cache' },
+  { pattern: '/logs', name: 'logs', section: 'logs' },
+  { pattern: '/stats', name: 'stats', section: 'stats' },
   { pattern: '/', name: 'runs', section: 'runs' },
 ]
 
@@ -57,6 +67,10 @@ export const navEntries: NavEntry[] = [
   { section: 'provenance', label: 'Provenance', href: '/provenance' },
   { section: 'facts', label: 'Memory', href: '/facts' },
   { section: 'explore', label: 'Explorer', href: '/explore' },
+  { section: 'jobs', label: 'Jobs', href: '/jobs' },
+  { section: 'cache', label: 'Caches', href: '/cache/searches' },
+  { section: 'logs', label: 'Logs', href: '/logs' },
+  { section: 'stats', label: 'Stats', href: '/stats' },
 ]
 
 export interface ResolvedRoute {

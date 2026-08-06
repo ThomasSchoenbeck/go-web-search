@@ -73,13 +73,37 @@ Stats dashboard view renders them all readably.
 - Unit tests (Vitest) cover the dashboard's major functions; `pnpm test` passes.
 - Playwright tests exercise the stats page and every interactive element; `pnpm test:e2e` passes against an isolated throwaway test database that is seeded and fully torn down.
 
+## Note added during implementation — the hit-rate RISK, resolved
+
+**Option (a): hit counts and tier distributions, no new counters.** A rate needs
+total lookups, and the schema records `hit_count` only on rows that exist — a
+miss leaves nothing behind to count. Deriving a real rate would mean writing
+counters on every lookup, which is a change to app state the read-only v1 does
+not make. `CacheStats` therefore carries `rows`, `tiers` (every tier present, at
+zero), `expired`, `rows_with_hits` and `total_hits`, and the dashboard says in
+one line why there is no rate rather than leaving the absence unexplained.
+
+Also landed:
+
+- `Store.Stats` now takes a `jobSample` bound, passed from the new
+  `observability.job_timing_sample` config key (default 200, 0 skips the
+  timing). Averaging the whole `done` history would be an unbounded scan.
+- Completion timing is averaged in Go, not SQL: the timestamps are RFC3339
+  strings with nanosecond precision, which SQLite's date functions do not parse
+  reliably.
+- Embedding meta comes from `system_meta` (`MetaGet`), not `LLMClient`, so the
+  snapshot stays a pure store read. Every key is optional — the dashboard shows
+  "unknown" rather than asserting something the backend never claimed.
+
 ## Files to Touch
 
 - `stats.go`
 - `server.go`
-- `stats_test.go`
+- `config.go`, `config.toml` — `observability.job_timing_sample`
+- `stats_test.go` [NEW]
 - `web/src/views/StatsDashboard.svelte` [NEW]
 - `web/src/App.svelte`
+- `web/src/lib/api.ts`, `web/src/lib/routes.ts` — the extended `Stats` type and the route/nav entry
 
 ## Dependencies
 

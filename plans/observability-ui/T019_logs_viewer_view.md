@@ -48,10 +48,21 @@ auto-refreshes as a polling tail.
 - Unit tests (Vitest) cover this view's major functions; `pnpm test` passes.
 - Playwright tests exercise the page and every interactive element — every button, link, and input; `pnpm test:e2e` passes against an isolated throwaway test database that is seeded and fully torn down, leaving no residual test data.
 
+## Note added during implementation
+
+Polling uses the shared `PollControls` component introduced in T015, so the
+interval dropdown, the toggle and the stop-on-unmount behaviour are the same
+code the jobs monitor runs.
+
+The e2e specs pivot on the seeded run id or on fixture message text, never on a
+total line count: the test server logs its own startup into the same database
+(see T018's note).
+
 ## Files to Touch
 
 - `web/src/views/LogsViewer.svelte` [NEW]
 - `web/src/App.svelte`
+- `web/src/lib/api.ts`, `web/src/lib/routes.ts` — the resource and the route/nav entry
 
 ## Dependencies
 

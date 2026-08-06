@@ -26,6 +26,10 @@ type apiServer struct {
 	// every real mode; the test harness swaps in a deterministic stub so e2e runs
 	// need no model endpoint.
 	embed queryEmbedder
+	// logs is the separate log database, threaded in from whoever opened it, so
+	// the logs endpoint can read what the batching writer has written. It is not
+	// part of the main Store.
+	logs *LogStore
 }
 
 // ---- request and response shapes, shared by REST and MCP ----
@@ -76,9 +80,9 @@ type Snippet struct {
 	Truncated bool   `json:"truncated"`
 }
 
-func newAPIServer(cfg Config, h *harvester) *apiServer {
+func newAPIServer(cfg Config, h *harvester, logs *LogStore) *apiServer {
 	llm := newLLMClient(cfg.LLM, cfg.LLM.Timeout.Duration, h.log)
-	s := &apiServer{cfg: cfg, h: h, llm: llm, resolver: newResolver(cfg, h.store, llm, h), embed: llm}
+	s := &apiServer{cfg: cfg, h: h, llm: llm, resolver: newResolver(cfg, h.store, llm, h), embed: llm, logs: logs}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/search", s.handleSearch)
@@ -97,6 +101,10 @@ func newAPIServer(cfg Config, h *harvester) *apiServer {
 	mux.HandleFunc("GET /api/runs/{id}/searches", s.handleRunSearches)
 	mux.HandleFunc("GET /api/runs/{id}/scrapes", s.handleRunScrapes)
 	mux.HandleFunc("GET /api/runs/{id}/causality", s.handleRunCausality)
+	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
+	mux.HandleFunc("GET /api/cache/searches", s.handleListSearchCache)
+	mux.HandleFunc("GET /api/cache/scrapes", s.handleListScrapeCache)
+	mux.HandleFunc("GET /api/logs", s.handleListLogs)
 	mux.HandleFunc("GET /api/provenance", s.handleProvenance)
 	mux.HandleFunc("GET /api/explore", s.handleExplore)
 	mux.HandleFunc("GET /api/searches/{id}/raw", s.handleSearchRaw)
@@ -489,7 +497,7 @@ func (s *apiServer) handleUIConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.h.store.Stats(r.Context())
+	stats, err := s.h.store.Stats(r.Context(), s.cfg.Observability.JobTimingSample)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -717,6 +725,74 @@ func (s *apiServer) handleProvenance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, chain)
 }
 
+// handleListJobs browses the background queue. Query params: status, type,
+// limit, offset. Read-only: nothing here claims, retries or deletes a job.
+func (s *apiServer) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	jobs, err := s.h.store.ListJobs(r.Context(), q.Get("status"), q.Get("type"), limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	counts, err := s.h.store.JobStatusCounts(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, JobsPage{Jobs: jobs, Counts: counts})
+}
+
+// handleListSearchCache browses the search cache. Query params: tier, q (query
+// substring), limit, offset. The stored results blob is summarised, not served.
+func (s *apiServer) handleListSearchCache(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	rows, err := s.h.store.ListSearchCache(r.Context(), q.Get("tier"), q.Get("q"), limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(rows), "entries": rows})
+}
+
+// handleListScrapeCache browses the scrape cache. Query params: tier, q (URL
+// substring), limit, offset. Content sizes only — the bodies stay behind
+// /api/scrapes/{id}.
+func (s *apiServer) handleListScrapeCache(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	rows, err := s.h.store.ListScrapeCache(r.Context(), q.Get("tier"), q.Get("q"), limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(rows), "entries": rows})
+}
+
+// handleListLogs queries the separate log database. Query params: run_id,
+// level, source, limit, offset. Newest-first, so the viewer reads as a tail.
+func (s *apiServer) handleListLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	entries, err := s.logs.Query(r.Context(), LogQuery{
+		RunID:  q.Get("run_id"),
+		Level:  q.Get("level"),
+		Source: q.Get("source"),
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(entries), "entries": entries})
+}
+
 // handleExplore is the raw nearest-neighbour probe. Unlike /api/memory/query it
 // gates nothing and synthesizes nothing — it reports what is near, and how near.
 func (s *apiServer) handleExplore(w http.ResponseWriter, r *http.Request) {
@@ -941,9 +1017,10 @@ func (s *apiServer) mcpGetRun(ctx context.Context, _ *mcp.CallToolRequest, in ge
 	return nil, *run, nil
 }
 
-// serveMode runs the HTTP server until a signal arrives.
-func serveMode(cfg Config, art *artifacts, h *harvester, stop context.Context) error {
-	srv := newAPIServer(cfg, h)
+// serveMode runs the HTTP server until a signal arrives. logs is the log
+// database opened in main, threaded through so the logs endpoint can read it.
+func serveMode(cfg Config, art *artifacts, h *harvester, logs *LogStore, stop context.Context) error {
+	srv := newAPIServer(cfg, h, logs)
 
 	// Background job system: worker pool + poller + reaper. Handlers (embed,
 	// distill, cleanup, re-embed) are registered on the runner as those

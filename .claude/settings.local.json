@@ -26,7 +26,14 @@
       "Bash(mkdir -p web/dist)",
       "Bash(rm -f go-web-search.exe)",
       "Bash(rm -rf web/dist)",
-      "Bash(ls -la .claude/agents/)"
+      "Bash(ls -la .claude/agents/)",
+      "Bash(gofmt -l jobstore.go searchcache.go scrapecache.go logstore.go stats.go server.go testsupport.go store.go main.go)",
+      "Bash(pnpm --dir web check)",
+      "Bash(pnpm --dir web test)",
+      "Bash(pnpm --dir web exec vitest run src/components/PollControls.test.ts)",
+      "Bash(pnpm --dir web exec vitest run src/views/JobsMonitor.test.ts)",
+      "Bash(pnpm --dir web build)",
+      "Bash(pnpm --dir web test:e2e)"
     ],
     "deny": [
       "Bash(* && *)"
