@@ -1,0 +1,6 @@
+Placeholder, not content. go:embed needs web/dist to hold at least one file to
+compile, and dist/ is generated rather than committed — so web/dist/.gitkeep is
+committed as the clean-checkout placeholder. Vite empties dist/ on every build,
+which would delete it; keeping the file here in publicDir means every build
+copies it straight back. Deleting this file breaks `go build` in a fresh clone
+after the first `pnpm build`.

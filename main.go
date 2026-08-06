@@ -25,7 +25,7 @@ func main() {
 
 func realMain() error {
 	configPath := flag.String("config", "config.toml", "TOML config file")
-	mode := flag.String("mode", "serve", "browse: drive the browser yourself; serve: REST + MCP server")
+	mode := flag.String("mode", "serve", "browse: drive the browser yourself; serve: REST + MCP server; testserve: browserless server for the test harness")
 	termsPath := flag.String("terms", "", "override search.terms_file")
 	enginesCSV := flag.String("engines", "", "override search.engines")
 	typedCSV := flag.String("typed", "", "override search.typed (none to disable)")
@@ -156,18 +156,23 @@ func realMain() error {
 	}
 	logWriter.setRun(runID)
 
-	userDataDir, err := filepath.Abs(cfg.Browser.UserDataDir)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(userDataDir, 0o755); err != nil {
-		return err
-	}
-	profilePath := filepath.Join(userDataDir, cfg.Browser.Profile)
-	if _, statErr := os.Stat(profilePath); os.IsNotExist(statErr) {
-		art.Log.Printf("NOTE: profile %q does not exist yet and will be created empty.", cfg.Browser.Profile)
-		art.Log.Printf("      A profile with no history is the strongest bot signal there is.")
-		art.Log.Printf("      Run -mode browse once and use the browser normally before harvesting.")
+	// testserve never launches Chrome, so it must not create a profile directory
+	// either — the test harness runs in throwaway directories.
+	var userDataDir, profilePath string
+	if *mode != "testserve" {
+		userDataDir, err = filepath.Abs(cfg.Browser.UserDataDir)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(userDataDir, 0o755); err != nil {
+			return err
+		}
+		profilePath = filepath.Join(userDataDir, cfg.Browser.Profile)
+		if _, statErr := os.Stat(profilePath); os.IsNotExist(statErr) {
+			art.Log.Printf("NOTE: profile %q does not exist yet and will be created empty.", cfg.Browser.Profile)
+			art.Log.Printf("      A profile with no history is the strongest bot signal there is.")
+			art.Log.Printf("      Run -mode browse once and use the browser normally before harvesting.")
+		}
 	}
 
 	// Shutdown signals must NOT be the parent of the browser context: cancelling
@@ -188,8 +193,12 @@ func realMain() error {
 		runErr = browseMode(cfg, art, userDataDir, stop)
 	case "serve":
 		runErr = serveWithBrowser(cfg, art, store, userDataDir, stop)
+	case "testserve":
+		// Browserless serve for the automated test harness (see testsupport.go).
+		// Point it at a throwaway directory with -data.
+		runErr = testServeMode(cfg, art, store, stop)
 	default:
-		runErr = fmt.Errorf("unknown -mode %q (want browse or serve)", *mode)
+		runErr = fmt.Errorf("unknown -mode %q (want browse, serve or testserve)", *mode)
 	}
 
 	if err := store.FinishRun(ctx, runID); err != nil {

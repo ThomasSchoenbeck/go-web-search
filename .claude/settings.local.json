@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm check *)",
+      "Bash(pnpm build *)",
+      "Bash(pnpm audit *)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm list *)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm test:e2e)",
+      "Bash(npm view *)",
+      "Bash(curl -s -w \"HTTP %{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(curl -s -g -w \"HTTP %{http_code}\\\\n\" \"http://[::1]:5173/\")",
+      "Bash(go vet *)",
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(go lint *)",
+      "Bash(gofmt -l .)",
+      "Bash(gofmt -l *)",
+      "Bash(gofmt -d config.go)",
+      "Bash(git check-ignore *)",
+      "Bash(grep -v \"^config.go$\")",
+      "Bash(task test *)",
+      "Bash(touch public/.gitkeep)",
+      "Bash(mkdir -p public)",
+      "Bash(mkdir -p web/dist)",
+      "Bash(rm -f go-web-search.exe)",
+      "Bash(rm -rf web/dist)",
+      "Bash(ls -la .claude/agents/)"
+    ],
+    "deny": [
+      "Bash(* && *)"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    // The Playwright harness under tests/e2e drives child processes and the
+    // filesystem, so it needs the Node globals alongside the browser lib.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "tests/**/*.ts"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

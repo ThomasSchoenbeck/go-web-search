@@ -84,6 +84,7 @@ func newAPIServer(cfg Config, h *harvester) *apiServer {
 	mux.HandleFunc("GET /api/memory/facts", s.handleListFacts)
 	mux.HandleFunc("GET /api/memory/facts/{id}", s.handleGetFact)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/ui-config", s.handleUIConfig)
 	mux.HandleFunc("POST /api/distill/preview", s.handleDistillPreview)
 	mux.HandleFunc("POST /api/vacuum", s.handleVacuum)
 	mux.HandleFunc("GET /api/runs", s.handleListRuns)
@@ -97,6 +98,12 @@ func newAPIServer(cfg Config, h *harvester) *apiServer {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+
+	// The embedded observability SPA at the root. Registered without a method:
+	// "GET /" would be ambiguous against the method-less "/mcp" below, which
+	// ServeMux rejects at registration. Every pattern here has a more specific
+	// path, so the API, MCP and health routes stay ahead of the fallback.
+	mux.HandleFunc("/", s.handleSPA)
 
 	// MCP shares the same listener; the SDK's handler is a plain http.Handler.
 	mcpServer := s.buildMCPServer()
@@ -453,6 +460,25 @@ func (s *apiServer) handleGetFact(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+// UIConfig is the non-secret slice of config.toml the observability SPA reads
+// at startup. It is built field by field rather than by marshalling
+// ObservabilityConfig, so adding a field to config can never leak one here by
+// accident. Milliseconds because the consumer is JavaScript.
+type UIConfig struct {
+	PollIntervalMS      int64 `json:"poll_interval_ms"`
+	PollEnabled         bool  `json:"poll_enabled"`
+	ProjectionSampleCap int   `json:"projection_sample_cap"`
+}
+
+func (s *apiServer) handleUIConfig(w http.ResponseWriter, r *http.Request) {
+	o := s.cfg.Observability
+	writeJSON(w, http.StatusOK, UIConfig{
+		PollIntervalMS:      o.PollInterval.Duration.Milliseconds(),
+		PollEnabled:         o.PollEnabled,
+		ProjectionSampleCap: o.ProjectionSampleCap,
+	})
 }
 
 func (s *apiServer) handleStats(w http.ResponseWriter, r *http.Request) {

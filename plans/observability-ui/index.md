@@ -81,12 +81,12 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Foundation — Build, Embed & Serving
 
-- [ ] T001: Document the Observability UI (what it is, build step, embedded serving) in README — [T001_readme_observability_ui.md](T001_readme_observability_ui.md)
-- [ ] T002: Scaffold the Svelte + Vite SPA under `web/` — pnpm, pinned versions, `pnpm audit` gate, dev proxy — [T002_svelte_vite_scaffold.md](T002_svelte_vite_scaffold.md)
-- [ ] T003: `go:embed` the Vite `dist/` + static serving + SPA fallback routing (dev vs embedded) — [T003_goembed_dist_spa_serving.md](T003_goembed_dist_spa_serving.md)
-- [ ] T004: Access model — edge auth (no app auth) + expose non-secret UI config (poll defaults, projection cap) from `config.toml` — [T004_spa_auth_bearer.md](T004_spa_auth_bearer.md)
-- [ ] T005: Shared frontend API-read layer (typed same-origin fetch, loading/error, config-driven polling helper) — [T005_frontend_api_read_layer.md](T005_frontend_api_read_layer.md)
-- [ ] T024: Test harness — Vitest unit + Playwright e2e, isolated test DB + teardown fixtures — [T024_test_harness.md](T024_test_harness.md)
+- [x] T001: Document the Observability UI (what it is, build step, embedded serving) in README — [T001_readme_observability_ui.md](T001_readme_observability_ui.md)
+- [x] T002: Scaffold the Svelte + Vite SPA under `web/` — pnpm, pinned versions, `pnpm audit` gate, dev proxy — [T002_svelte_vite_scaffold.md](T002_svelte_vite_scaffold.md)
+- [x] T003: `go:embed` the Vite `dist/` + static serving + SPA fallback routing (dev vs embedded) — [T003_goembed_dist_spa_serving.md](T003_goembed_dist_spa_serving.md)
+- [x] T004: Access model — edge auth (no app auth) + expose non-secret UI config (poll defaults, projection cap) from `config.toml` — [T004_spa_auth_bearer.md](T004_spa_auth_bearer.md)
+- [x] T005: Shared frontend API-read layer (typed same-origin fetch, loading/error, config-driven polling helper) — [T005_frontend_api_read_layer.md](T005_frontend_api_read_layer.md)
+- [x] T024: Test harness — Vitest unit + Playwright e2e, isolated test DB + teardown fixtures — [T024_test_harness.md](T024_test_harness.md)
 
 ### Feature: Core Views — Runs, Searches & SERPs
 

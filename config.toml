@@ -175,3 +175,13 @@ upsert_threshold = 0.95
 top_k = 8
 gate3_enabled = true
 remember_default = "short"
+
+# Non-secret settings served to the observability SPA by GET /api/ui-config.
+# The UI reads these once at startup as its session defaults; a dropdown and a
+# toggle can override the polling values live, but nothing is written back here.
+# Never put a credential in this block - the endpoint is unauthenticated when
+# api_key is unset, which is the assumed edge-auth deployment.
+[observability]
+poll_interval = "5s"          # live-refresh interval for the jobs and logs views
+poll_enabled = false          # whether those views start polling at all
+projection_sample_cap = 2000  # max embedding vectors the 2-D projection may pull

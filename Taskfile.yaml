@@ -5,6 +5,13 @@ vars:
   APP_NAME: go-web-search
 
 tasks:
+  web:
+    desc: "Build the observability SPA into web/dist"
+    dir: web
+    cmds:
+      - pnpm install --frozen-lockfile
+      - pnpm build
+
   build:
     desc: "Build all three platforms: Windows, Linux x64, Linux ARM64"
     cmds:
@@ -12,8 +19,12 @@ tasks:
       - task: build-linux-x64
       - task: build-linux-arm64
 
+  # go:embed reads web/dist at compile time, so the SPA build is a dependency of
+  # every binary target rather than a step you are trusted to remember.
   build-windows:
     desc: "Build Windows amd64 binary"
+    deps:
+      - web
     env:
       GOOS: windows
       GOARCH: amd64
@@ -23,6 +34,8 @@ tasks:
 
   build-linux-x64:
     desc: "Build Linux x64 (amd64) binary"
+    deps:
+      - web
     env:
       GOOS: linux
       GOARCH: amd64
@@ -32,12 +45,23 @@ tasks:
 
   build-linux-arm64:
     desc: "Build Linux ARM64 binary"
+    deps:
+      - web
     env:
       GOOS: linux
       GOARCH: arm64
       CGO_ENABLED: "0"
     cmds:
       - go build -ldflags="-s -w" -o dist/{{.APP_NAME}}-linux-arm64 .
+
+  test:
+    desc: "Run every suite: Go, frontend unit (Vitest), end-to-end (Playwright)"
+    deps:
+      - web # the e2e run serves the embedded SPA, so dist must be current
+    cmds:
+      - go test ./...
+      - pnpm --dir web test
+      - pnpm --dir web test:e2e
 
   clean:
     desc: "Clean build artifacts"

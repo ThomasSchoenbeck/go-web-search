@@ -67,6 +67,78 @@ service. Embedding uses Qwen3-Embedding-8B via a self-hosted, OpenAI-compatible
 llama.cpp endpoint configured under `[[llm.model]]`; a model or dimension change
 triggers a blue/green re-embed migration.
 
+## Observability UI (planned)
+
+A read-only web UI for inspecting everything the harvester stores and does. It is
+a Svelte 5 + Vite **client-only SPA written in TypeScript** — not SvelteKit, no
+SSR, no server adapter — built to static assets and embedded into the Go binary,
+served by the existing `-mode serve` listener alongside the current REST and MCP
+routes. Single binary, single service, no separate deployable. The design and its
+task breakdown live in `plans/observability-ui/`.
+
+Planned views: runs, per-engine searches and their raw SERPs, scrapes
+(raw/clean/text plus images and fetch metadata), the provenance chains that
+connect them (run → search → url → scrape → memory fact → vector), memory facts,
+a semantic explorer over the vector store, the background job queue, the search
+and scrape caches, the logs, and a stats dashboard. An embeddings 2-D projection
+scatter is a deliberately later phase.
+
+**Inspection only in v1.** The UI reads existing tables and adds read-only JSON
+endpoints where none exists. It triggers no searches, scrapes or distillation and
+performs no destructive operations; the existing write endpoints
+(`/api/memory/store`, `/api/distill/preview`, `/api/vacuum`) are out of scope for it.
+
+**Access model — edge auth, no app-level auth.** The SPA shell and every `/api/*`
+route are served openly; authentication is delegated to an edge layer (reverse
+proxy, gateway, or trusted network) in front of the binary. There is no login
+screen and no token handling in the SPA. The existing `server.api_key` bearer
+stays supported for anyone exposing the binary directly, but the assumed
+observability-UI deployment leaves it unset. This is explicitly not a hardened
+public-auth model.
+
+**Build model — the frontend build runs before `go build`.** The frontend lives
+under a new `web/` directory and is built with Node + Vite (via pnpm) into
+`web/dist/`, which is then embedded into the binary with `go:embed`. `web/dist/`
+is **gitignored and generated at build time — it is not committed**, so a plain
+`go build` with no prior frontend build embeds nothing (or fails on a missing
+directory). The Node/Vite step must therefore run first, and `Taskfile.yaml`
+gains targets that chain it ahead of `go build` so one command produces the
+embedded binary in the right order:
+
+```bash
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build      # emits web/dist/
+go build .                # embeds web/dist/
+```
+
+In development the Vite dev server serves the SPA instead and proxies `/api`,
+`/mcp` and `/healthz` to the serve listener (`server.addr`, default `:8082`), so
+no rebuild is needed while iterating.
+
+**Node, pnpm and Vite are new build-time dependencies** — required to build a
+release binary, not to run one. Every UI setting (poll interval and whether
+polling is on by default, projection sample cap) lives in `config.toml` under
+`[observability]` and is served to the SPA by `GET /api/ui-config` at runtime
+rather than baked in at build time. That endpoint carries only those non-secret
+tunables; `api_key` is never exposed.
+
+### Tests
+
+Three suites, all runnable with `task test`:
+
+```bash
+go test ./...            # backend, including the endpoint tests
+pnpm --dir web test      # frontend unit tests (Vitest)
+pnpm --dir web test:e2e  # end-to-end (Playwright, drives the real binary)
+```
+
+Every suite runs against a **throwaway main DB and log DB** and removes them
+afterwards — no suite ever opens `./data`. Go tests get theirs from the helper
+in `testsupport.go`; the Playwright harness creates a temp directory, starts the
+binary in `-mode testserve` (browserless, seeded with a small fixture dataset)
+on a free port, and deletes the directory on completion whether the run passed,
+failed or was interrupted. `-mode testserve` exists only for that harness.
+
 ## Concurrency
 
 Engines run in parallel per term, each in its own tab, but staggered:
