@@ -103,14 +103,14 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Navigation Shell
 
-- [ ] T027: Navigation shell — persistent nav over every built view, active-route marking, one source of truth for routes — [T027_navigation_shell.md](T027_navigation_shell.md)
+- [x] T027: Navigation shell — persistent nav over every built view, active-route marking, one source of truth for routes — [T027_navigation_shell.md](T027_navigation_shell.md)
 
 ### Feature: Provenance / Causality
 
-- [ ] T009: NEW endpoint — provenance pivot for a URL (backward searches+rank, forward scrape→facts→vectors) — [T009_provenance_url_endpoint.md](T009_provenance_url_endpoint.md)
-- [ ] T010: Provenance view — pivot on a URL, render the backward/forward chain; link from facts (reverse) — [T010_provenance_view.md](T010_provenance_view.md)
-- [ ] T025: NEW endpoint — whole-run causality graph (searches→urls→scrapes→facts for a run) — [T025_run_causality_endpoint.md](T025_run_causality_endpoint.md)
-- [ ] T026: Run causality graph view (render the run-level chain) — [T026_run_causality_view.md](T026_run_causality_view.md)
+- [x] T009: NEW endpoint — provenance pivot for a URL (backward searches+rank, forward scrape→facts→vectors) — [T009_provenance_url_endpoint.md](T009_provenance_url_endpoint.md)
+- [x] T010: Provenance view — pivot on a URL, render the backward/forward chain; link from facts (reverse) — [T010_provenance_view.md](T010_provenance_view.md)
+- [x] T025: NEW endpoint — whole-run causality graph (searches→urls→scrapes→facts for a run) — [T025_run_causality_endpoint.md](T025_run_causality_endpoint.md)
+- [x] T026: Run causality graph view (render the run-level chain) — [T026_run_causality_view.md](T026_run_causality_view.md)
 
 ### Feature: Memory & Semantic Explorer
 

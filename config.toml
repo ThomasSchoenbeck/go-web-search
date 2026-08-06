@@ -185,3 +185,4 @@ remember_default = "short"
 poll_interval = "5s"          # live-refresh interval for the jobs and logs views
 poll_enabled = false          # whether those views start polling at all
 projection_sample_cap = 2000  # max embedding vectors the 2-D projection may pull
+causality_max_urls = 200      # max URLs in one run's causality graph before it truncates

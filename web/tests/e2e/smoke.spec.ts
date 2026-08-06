@@ -9,7 +9,7 @@ import { baseUrl } from './fixtures'
 
 test('serves the embedded SPA shell', async ({ page }) => {
   await page.goto(baseUrl('/'))
-  await expect(page.getByTestId('nav-runs')).toHaveText('Observability UI')
+  await expect(page.getByTestId('nav-home')).toHaveText('Observability UI')
   await expect(page.getByRole('heading', { name: 'Runs', level: 1 })).toBeVisible()
 })
 

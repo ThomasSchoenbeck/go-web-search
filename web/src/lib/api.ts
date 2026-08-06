@@ -189,3 +189,91 @@ export function scrapeResource(id: string, includeRaw = false): Resource<ScrapeD
   const query = includeRaw ? '?raw=1' : ''
   return createResource(() => getJson<ScrapeDetail>(`/api/scrapes/${encodeURIComponent(id)}${query}`))
 }
+
+/** GET /api/provenance?url= (URLProvenance in provenance.go). */
+export interface FoundBySearch {
+  search_id: string
+  run_id: string
+  term: string
+  engine: string
+  search_mode: string
+  rank: number
+  created_at: string
+}
+
+export interface FactProvenance {
+  id: string
+  text: string
+  source_url?: string
+  volatility?: string
+  tier?: string
+  has_vector: boolean
+  created_at: string
+}
+
+export interface ScrapeSizes {
+  scrape_id: string
+  url: string
+  title?: string
+  http_status?: number
+  fetched_with?: string
+  text_chars: number
+  clean_html_chars: number
+  raw_html_chars: number
+  created_at: string
+}
+
+export interface UrlProvenance {
+  url: string
+  url_id?: string
+  known: boolean
+  found_by: FoundBySearch[]
+  scrape?: ScrapeSizes
+  facts: FactProvenance[]
+  /** False while a re-embed migration runs or no vector table is active. */
+  vectors_available: boolean
+  note?: string
+}
+
+/** GET /api/runs/{id}/causality (CausalityGraph in provenance.go). */
+export type CausalityKind = 'search' | 'url' | 'scrape' | 'fact'
+
+export interface CausalityNode {
+  id: string
+  kind: CausalityKind
+  ref_id: string
+  label: string
+  detail?: string
+  url?: string
+  has_vector?: boolean
+}
+
+export interface CausalityEdge {
+  from: string
+  to: string
+  rank?: number
+}
+
+export interface CausalityGraph {
+  run_id: string
+  nodes: CausalityNode[]
+  edges: CausalityEdge[]
+  truncated: boolean
+  limit: number
+  vectors_available: boolean
+  note?: string
+}
+
+export function provenanceResource(url: string): Resource<UrlProvenance> {
+  return createResource(() => getJson<UrlProvenance>(`/api/provenance?url=${encodeURIComponent(url)}`))
+}
+
+export function runCausalityResource(runId: string): Resource<CausalityGraph> {
+  return createResource(() =>
+    getJson<CausalityGraph>(`/api/runs/${encodeURIComponent(runId)}/causality`).then((graph) => ({
+      ...graph,
+      nodes: graph.nodes ?? [],
+      edges: graph.edges ?? [],
+    })),
+  )
+}

@@ -26,6 +26,11 @@
 <section>
   <p><a href="/runs" data-testid="back-to-runs">← All runs</a></p>
   <h1>Run {id}</h1>
+  <p>
+    <a href="/runs/{id}/causality" data-testid="run-causality-link">
+      See what caused what in this run →
+    </a>
+  </p>
 
   {#if $run.loading && !$run.data}
     <p data-testid="run-loading">Loading run…</p>

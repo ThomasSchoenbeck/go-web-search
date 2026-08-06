@@ -51,6 +51,10 @@ type ObservabilityConfig struct {
 	// ProjectionSampleCap bounds how many embedding vectors the 2-D projection
 	// view may pull. Vector search is a linear scan, so this is a real limit.
 	ProjectionSampleCap int `toml:"projection_sample_cap"`
+	// CausalityMaxURLs bounds the whole-run causality graph. A broad run can
+	// find thousands of URLs, each dragging its scrape and facts into the
+	// response; past this many the graph is truncated and says so.
+	CausalityMaxURLs int `toml:"causality_max_urls"`
 }
 
 // RetentionConfig governs shrinking the database beyond the tier expiry: one
@@ -323,6 +327,7 @@ func defaultConfig() Config {
 			PollInterval:        Duration{5 * time.Second},
 			PollEnabled:         false,
 			ProjectionSampleCap: 2000,
+			CausalityMaxURLs:    200,
 		},
 	}
 }

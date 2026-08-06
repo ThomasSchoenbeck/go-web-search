@@ -18,16 +18,29 @@ function currentPath(): string {
   return window.location.pathname
 }
 
-const store = writable<string>(typeof window === 'undefined' ? '/' : currentPath())
+const pathStore = writable<string>(typeof window === 'undefined' ? '/' : currentPath())
+const searchStore = writable<string>(typeof window === 'undefined' ? '' : window.location.search)
 
-/** The active path, as a Svelte store. */
-export const path: Readable<string> = { subscribe: store.subscribe }
+/** The active pathname, as a Svelte store. */
+export const path: Readable<string> = { subscribe: pathStore.subscribe }
+
+/**
+ * The active query string, including the leading `?`. Separate from the path so
+ * a view keyed by a query param (the provenance pivot) re-reads when only the
+ * query changes and the pathname does not.
+ */
+export const search: Readable<string> = { subscribe: searchStore.subscribe }
+
+function sync(): void {
+  pathStore.set(currentPath())
+  searchStore.set(window.location.search)
+}
 
 export function navigate(to: string, replace = false): void {
-  if (to === currentPath()) return
+  if (to === currentPath() + window.location.search) return
   if (replace) window.history.replaceState({}, '', to)
   else window.history.pushState({}, '', to)
-  store.set(currentPath())
+  sync()
 }
 
 /** Should this click be handled by the router rather than the browser? */
@@ -46,7 +59,7 @@ export function isInternalNavigation(event: MouseEvent, anchor: HTMLAnchorElemen
 
 /** Install the popstate and click listeners. Returns a teardown function. */
 export function startRouter(): () => void {
-  const onPopState = (): void => store.set(currentPath())
+  const onPopState = (): void => sync()
   const onClick = (event: MouseEvent): void => {
     const anchor = (event.target as Element | null)?.closest('a')
     if (!anchor) return
@@ -57,7 +70,7 @@ export function startRouter(): () => void {
 
   window.addEventListener('popstate', onPopState)
   document.addEventListener('click', onClick)
-  store.set(currentPath())
+  sync()
 
   return () => {
     window.removeEventListener('popstate', onPopState)

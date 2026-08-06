@@ -1,36 +1,42 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { path, startRouter, matchRoute } from './lib/router'
+  import { path, search, startRouter } from './lib/router'
+  import { resolveRoute } from './lib/routes'
+  import Nav from './components/Nav.svelte'
   import RunsList from './views/RunsList.svelte'
   import RunDetail from './views/RunDetail.svelte'
+  import RunCausality from './views/RunCausality.svelte'
   import SearchesList from './views/SearchesList.svelte'
   import SerpViewer from './views/SerpViewer.svelte'
   import ScrapeDetail from './views/ScrapeDetail.svelte'
+  import Provenance from './views/Provenance.svelte'
 
   onMount(() => startRouter())
 
-  // First match wins, so the more specific patterns come first.
-  let runSearches = $derived(matchRoute('/runs/:id/searches', $path))
-  let runDetail = $derived(matchRoute('/runs/:id', $path))
-  let serp = $derived(matchRoute('/searches/:id', $path))
-  let scrape = $derived(matchRoute('/scrapes/:id', $path))
-  let runsList = $derived(matchRoute('/runs', $path) ?? matchRoute('/', $path))
+  // routes.ts is the single source of truth: the nav renders from the same list.
+  let route = $derived(resolveRoute($path))
+  let pivotUrl = $derived(new URLSearchParams($search).get('url') ?? '')
 </script>
 
 <header>
-  <a href="/runs" data-testid="nav-runs">Observability UI</a>
+  <a href="/runs" data-testid="nav-home">Observability UI</a>
+  <Nav />
 </header>
 
 <main>
-  {#if runSearches}
-    <SearchesList runId={runSearches.id} />
-  {:else if runDetail}
-    <RunDetail id={runDetail.id} />
-  {:else if serp}
-    <SerpViewer id={serp.id} />
-  {:else if scrape}
-    <ScrapeDetail id={scrape.id} />
-  {:else if runsList}
+  {#if route?.name === 'run-searches'}
+    <SearchesList runId={route.params.id} />
+  {:else if route?.name === 'run-causality'}
+    <RunCausality runId={route.params.id} />
+  {:else if route?.name === 'run-detail'}
+    <RunDetail id={route.params.id} />
+  {:else if route?.name === 'serp'}
+    <SerpViewer id={route.params.id} />
+  {:else if route?.name === 'scrape'}
+    <ScrapeDetail id={route.params.id} />
+  {:else if route?.name === 'provenance'}
+    <Provenance url={pivotUrl} />
+  {:else if route?.name === 'runs'}
     <RunsList />
   {:else}
     <section data-testid="not-found">

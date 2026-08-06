@@ -92,6 +92,8 @@ func newAPIServer(cfg Config, h *harvester) *apiServer {
 	mux.HandleFunc("GET /api/runs/{id}/urls", s.handleRunURLs)
 	mux.HandleFunc("GET /api/runs/{id}/searches", s.handleRunSearches)
 	mux.HandleFunc("GET /api/runs/{id}/scrapes", s.handleRunScrapes)
+	mux.HandleFunc("GET /api/runs/{id}/causality", s.handleRunCausality)
+	mux.HandleFunc("GET /api/provenance", s.handleProvenance)
 	mux.HandleFunc("GET /api/searches/{id}/raw", s.handleSearchRaw)
 	mux.HandleFunc("GET /api/scrapes/{id}", s.handleGetScrape)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -692,6 +694,33 @@ func (s *apiServer) handleRunScrapes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"scrape_ids": ids})
+}
+
+// handleProvenance pivots on a URL. An unknown URL is a normal, empty answer —
+// not a 404 — because "nothing points at this yet" is a real observation.
+func (s *apiServer) handleProvenance(w http.ResponseWriter, r *http.Request) {
+	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if rawURL == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("url query parameter is required"))
+		return
+	}
+	chain, err := s.h.store.URLProvenance(r.Context(), rawURL)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, chain)
+}
+
+// handleRunCausality returns the whole-run graph. An unknown run id yields an
+// empty graph rather than an error, matching the URL pivot.
+func (s *apiServer) handleRunCausality(w http.ResponseWriter, r *http.Request) {
+	graph, err := s.h.store.RunCausality(r.Context(), r.PathValue("id"), s.cfg.Observability.CausalityMaxURLs)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, graph)
 }
 
 func (s *apiServer) handleSearchRaw(w http.ResponseWriter, r *http.Request) {
