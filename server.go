@@ -107,6 +107,7 @@ func newAPIServer(cfg Config, h *harvester, logs *LogStore) *apiServer {
 	mux.HandleFunc("GET /api/logs", s.handleListLogs)
 	mux.HandleFunc("GET /api/provenance", s.handleProvenance)
 	mux.HandleFunc("GET /api/explore", s.handleExplore)
+	mux.HandleFunc("GET /api/projection", s.handleProjection)
 	mux.HandleFunc("GET /api/searches/{id}/raw", s.handleSearchRaw)
 	mux.HandleFunc("GET /api/scrapes/{id}", s.handleGetScrape)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -808,6 +809,20 @@ func (s *apiServer) handleExplore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleProjection dumps raw embeddings for the browser to lay out. The sample
+// cap is config-driven (observability.projection_sample_cap) because this reads
+// whole vectors, not distances — an uncapped dump is a very large response.
+func (s *apiServer) handleProjection(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	dump, err := s.h.store.VectorProjection(r.Context(), s.cfg.Observability.ProjectionSampleCap, limit, offset)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, dump)
 }
 
 // handleRunCausality returns the whole-run graph. An unknown run id yields an

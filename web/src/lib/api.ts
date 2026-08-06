@@ -514,6 +514,42 @@ export function logsResource(query: LogsQuery): Resource<LogEntry[]> {
   return createResource(() => entriesOf<LogEntry>(`/api/logs?${params}`))
 }
 
+/** GET /api/projection (ProjectionDump in projection.go). */
+export interface ProjectionPoint {
+  id: string
+  owner_kind: 'memory' | 'search'
+  label: string
+  source_url?: string
+  /** The raw embedding. The 2-D layout is computed here, not on the server. */
+  vector: number[]
+}
+
+export interface ProjectionDump {
+  /** False when no vector table is active or a re-embed is in flight. */
+  available: boolean
+  note?: string
+  model?: string
+  dim?: number
+  limit: number
+  offset: number
+  /** Every vector in the store, per owner kind — the denominator for "showing N of M". */
+  total: Record<string, number>
+  truncated: boolean
+  points: ProjectionPoint[]
+}
+
+/** `limit` is clamped server-side to observability.projection_sample_cap. */
+export function projectionResource(limit: number, offset = 0): Resource<ProjectionDump> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  return createResource(() =>
+    getJson<ProjectionDump>(`/api/projection?${params}`).then((dump) => ({
+      ...dump,
+      points: dump.points ?? [],
+      total: dump.total ?? {},
+    })),
+  )
+}
+
 export function runCausalityResource(runId: string): Resource<CausalityGraph> {
   return createResource(() =>
     getJson<CausalityGraph>(`/api/runs/${encodeURIComponent(runId)}/causality`).then((graph) => ({

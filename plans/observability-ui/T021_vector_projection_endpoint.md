@@ -59,13 +59,34 @@ unavailable — and with no new Go dependency.
 - The route is registered in `newAPIServer`, behind the shared `/api` middleware (`withAuth`, a no-op when `api_key` is unset — edge auth); the sample cap
   is read from config, not hardcoded.
 
+## Note added during implementation
+
+- **`config.go` and `config.toml` needed no change.** The task expected the cap
+  to be added here, but `observability.projection_sample_cap` already exists —
+  T004 added it, and `/api/ui-config` already serves it. The handler passes it to
+  the store; the view asks for it. Nothing new was introduced.
+- **Reading a vector back out of an `F32_BLOB` column: `vector_extract()` works.**
+  vectors.go documents what the Rust Turso engine does *not* implement
+  (`libsql_vector_idx`, `vector_top_k`) but said nothing about extraction. It was
+  probed against the real engine: `vector_extract(embedding)` returns the same
+  `'[a,b,c]'` text `vector32()` accepts. The inverse parser, `parseVectorLiteral`,
+  therefore sits in `vectors.go` beside `vectorLiteral` rather than in
+  `projection.go` — it is that function's mirror image, not a projection concern.
+  Decoding the raw blob bytes also works (little-endian float32, 4 bytes each)
+  but hard-codes a storage layout the engine never promised, so it was not used.
+- The route is `GET /api/projection?limit=&offset=`. `limit` is clamped to the
+  configured cap, so a caller cannot ask for more than deployment policy allows.
+- A vector whose owning row was deleted is skipped rather than plotted as an
+  anonymous dot, matching the explorer. `total` still counts it, because it is
+  genuinely in the store.
+- `go.mod` is unchanged, as required.
+
 ## Files to Touch
 
 - `projection.go` [NEW]
 - `projection_test.go` [NEW]
+- `vectors.go` — `parseVectorLiteral`, the inverse of `vectorLiteral`
 - `server.go`
-- `config.go`
-- `config.toml`
 
 ## Dependencies
 

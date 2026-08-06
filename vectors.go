@@ -166,6 +166,29 @@ func vectorLiteral(v []float32) string {
 	return b.String()
 }
 
+// parseVectorLiteral reads the '[a,b,c]' text back into floats — the inverse of
+// vectorLiteral, and the only way out of an F32_BLOB column: the engine's
+// vector_extract() returns this form, and decoding the blob bytes instead would
+// mean hard-coding a storage layout the engine never promised.
+func parseVectorLiteral(s string) ([]float32, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "[")
+	s = strings.TrimSuffix(s, "]")
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]float32, len(parts))
+	for i, p := range parts {
+		f, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+		if err != nil {
+			return nil, fmt.Errorf("parsing vector component %d: %w", i, err)
+		}
+		out[i] = float32(f)
+	}
+	return out, nil
+}
+
 // isNoSuchTable reports whether an error is a missing-table error, which the
 // re-embed pass treats as "no rows of this owner kind yet".
 func isNoSuchTable(err error) bool {

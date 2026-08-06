@@ -130,8 +130,8 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Embeddings 2-D Projection (later phase)
 
-- [ ] T021: NEW endpoint — vector projection data dump (memory + search owners) for scatter rendering — [T021_vector_projection_endpoint.md](T021_vector_projection_endpoint.md)
-- [ ] T022: 2-D projection scatter view (client-side PCA) — [T022_projection_scatter_view.md](T022_projection_scatter_view.md)
+- [x] T021: NEW endpoint — vector projection data dump (memory + search owners) for scatter rendering — [T021_vector_projection_endpoint.md](T021_vector_projection_endpoint.md)
+- [x] T022: 2-D projection scatter view (client-side PCA) — [T022_projection_scatter_view.md](T022_projection_scatter_view.md)
 
 ### Feature: Documentation & Verification
 
@@ -247,6 +247,20 @@ registers its entry as it lands rather than leaving views URL-only (T006)
   owner kinds and adds NO new Go dependency; the T022 view computes a **PCA**
   projection to 2-D in the browser (fast, deterministic, minimal/no JS dep — not
   UMAP/t-SNE). The sample cap is exposed in `config.toml` rather than hardcoded.
+  **Landed with no dependency change at all** — neither `go.mod` nor
+  `package.json` moved. PCA is a local helper (`web/src/lib/projection.ts`) doing
+  power iteration without ever forming the d×d covariance matrix, which at real
+  embedding dimensions would be larger than the data it summarises.
+  Responsiveness is a progress state rather than a worker; the config cap already
+  bounds the work, and a worker would not run under jsdom.
+- **`vector_extract()` IS available on the Rust Turso engine (found in T021).**
+  vectors.go lists what the engine lacks (`libsql_vector_idx`, `vector_top_k`)
+  but was silent on extraction. Probed against the real engine:
+  `vector_extract(embedding)` returns the same `'[a,b,c]'` text `vector32()`
+  parses, which is how T021 reads embeddings back out of an `F32_BLOB` column.
+  `parseVectorLiteral` in `vectors.go` is its inverse. Decoding the blob bytes
+  directly also works (little-endian float32) but assumes a layout the engine
+  never documented — don't.
 - **Vectors live in a generation table (T012/T021).** The active table name comes
   from `system_meta` (`metaVectorTable`); during a re-embed migration semantic
   reads are unavailable. The explorer and projection must degrade gracefully

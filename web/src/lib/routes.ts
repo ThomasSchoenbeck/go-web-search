@@ -28,6 +28,7 @@ export type ViewName =
   | 'scrape-cache'
   | 'logs'
   | 'stats'
+  | 'projection'
 
 export interface RouteDef {
   pattern: string
@@ -52,6 +53,7 @@ export const routes: RouteDef[] = [
   { pattern: '/cache/scrapes', name: 'scrape-cache', section: 'cache' },
   { pattern: '/logs', name: 'logs', section: 'logs' },
   { pattern: '/stats', name: 'stats', section: 'stats' },
+  { pattern: '/projection', name: 'projection', section: 'projection' },
   { pattern: '/', name: 'runs', section: 'runs' },
 ]
 
@@ -67,6 +69,7 @@ export const navEntries: NavEntry[] = [
   { section: 'provenance', label: 'Provenance', href: '/provenance' },
   { section: 'facts', label: 'Memory', href: '/facts' },
   { section: 'explore', label: 'Explorer', href: '/explore' },
+  { section: 'projection', label: 'Projection', href: '/projection' },
   { section: 'jobs', label: 'Jobs', href: '/jobs' },
   { section: 'cache', label: 'Caches', href: '/cache/searches' },
   { section: 'logs', label: 'Logs', href: '/logs' },

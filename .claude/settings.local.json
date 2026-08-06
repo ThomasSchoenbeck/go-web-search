@@ -33,7 +33,9 @@
       "Bash(pnpm --dir web exec vitest run src/components/PollControls.test.ts)",
       "Bash(pnpm --dir web exec vitest run src/views/JobsMonitor.test.ts)",
       "Bash(pnpm --dir web build)",
-      "Bash(pnpm --dir web test:e2e)"
+      "Bash(pnpm --dir web test:e2e)",
+      "Bash(pnpm --dir web exec vitest run src/lib/projection.test.ts)",
+      "Bash(pnpm --dir web exec vitest run src/views/ProjectionScatter.test.ts)"
     ],
     "deny": [
       "Bash(* && *)"

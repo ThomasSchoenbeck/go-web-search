@@ -18,6 +18,7 @@
   import ScrapeCacheBrowser from './views/ScrapeCacheBrowser.svelte'
   import LogsViewer from './views/LogsViewer.svelte'
   import StatsDashboard from './views/StatsDashboard.svelte'
+  import ProjectionScatter from './views/ProjectionScatter.svelte'
 
   onMount(() => startRouter())
 
@@ -63,6 +64,8 @@
     <LogsViewer />
   {:else if route?.name === 'stats'}
     <StatsDashboard />
+  {:else if route?.name === 'projection'}
+    <ProjectionScatter />
   {:else if route?.name === 'runs'}
     <RunsList />
   {:else}
