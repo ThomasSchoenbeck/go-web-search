@@ -20,6 +20,9 @@ export type ViewName =
   | 'serp'
   | 'scrape'
   | 'provenance'
+  | 'facts'
+  | 'fact-detail'
+  | 'explore'
 
 export interface RouteDef {
   pattern: string
@@ -36,6 +39,9 @@ export const routes: RouteDef[] = [
   { pattern: '/searches/:id', name: 'serp', section: 'runs' },
   { pattern: '/scrapes/:id', name: 'scrape', section: 'runs' },
   { pattern: '/provenance', name: 'provenance', section: 'provenance' },
+  { pattern: '/facts/:id', name: 'fact-detail', section: 'facts' },
+  { pattern: '/facts', name: 'facts', section: 'facts' },
+  { pattern: '/explore', name: 'explore', section: 'explore' },
   { pattern: '/', name: 'runs', section: 'runs' },
 ]
 
@@ -49,6 +55,8 @@ export interface NavEntry {
 export const navEntries: NavEntry[] = [
   { section: 'runs', label: 'Runs', href: '/runs' },
   { section: 'provenance', label: 'Provenance', href: '/provenance' },
+  { section: 'facts', label: 'Memory', href: '/facts' },
+  { section: 'explore', label: 'Explorer', href: '/explore' },
 ]
 
 export interface ResolvedRoute {

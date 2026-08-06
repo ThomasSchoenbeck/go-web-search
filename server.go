@@ -22,6 +22,10 @@ type apiServer struct {
 	llm      *LLMClient
 	resolver *resolver
 	http     *http.Server
+	// embed is the semantic explorer's embedding source. It is the LLM client in
+	// every real mode; the test harness swaps in a deterministic stub so e2e runs
+	// need no model endpoint.
+	embed queryEmbedder
 }
 
 // ---- request and response shapes, shared by REST and MCP ----
@@ -74,7 +78,7 @@ type Snippet struct {
 
 func newAPIServer(cfg Config, h *harvester) *apiServer {
 	llm := newLLMClient(cfg.LLM, cfg.LLM.Timeout.Duration, h.log)
-	s := &apiServer{cfg: cfg, h: h, llm: llm, resolver: newResolver(cfg, h.store, llm, h)}
+	s := &apiServer{cfg: cfg, h: h, llm: llm, resolver: newResolver(cfg, h.store, llm, h), embed: llm}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/search", s.handleSearch)
@@ -94,6 +98,7 @@ func newAPIServer(cfg Config, h *harvester) *apiServer {
 	mux.HandleFunc("GET /api/runs/{id}/scrapes", s.handleRunScrapes)
 	mux.HandleFunc("GET /api/runs/{id}/causality", s.handleRunCausality)
 	mux.HandleFunc("GET /api/provenance", s.handleProvenance)
+	mux.HandleFunc("GET /api/explore", s.handleExplore)
 	mux.HandleFunc("GET /api/searches/{id}/raw", s.handleSearchRaw)
 	mux.HandleFunc("GET /api/scrapes/{id}", s.handleGetScrape)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -710,6 +715,23 @@ func (s *apiServer) handleProvenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, chain)
+}
+
+// handleExplore is the raw nearest-neighbour probe. Unlike /api/memory/query it
+// gates nothing and synthesizes nothing — it reports what is near, and how near.
+func (s *apiServer) handleExplore(w http.ResponseWriter, r *http.Request) {
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("q query parameter is required"))
+		return
+	}
+	k, _ := strconv.Atoi(r.URL.Query().Get("k"))
+	result, err := s.h.store.Explore(r.Context(), s.embed, query, k)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleRunCausality returns the whole-run graph. An unknown run id yields an

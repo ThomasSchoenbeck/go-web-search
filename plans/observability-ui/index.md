@@ -114,9 +114,9 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Memory & Semantic Explorer
 
-- [ ] T011: Memory facts browser view (reuses `/api/memory/facts` + `/{id}`) — [T011_memory_facts_browser.md](T011_memory_facts_browser.md)
-- [ ] T012: NEW endpoint — semantic explorer: embed query text, VectorSearch memory+search, return neighbors+distance — [T012_semantic_explorer_endpoint.md](T012_semantic_explorer_endpoint.md)
-- [ ] T013: Semantic explorer view — query box, top-k neighbor list with cosine distance, links to facts/searches — [T013_semantic_explorer_view.md](T013_semantic_explorer_view.md)
+- [x] T011: Memory facts browser view (reuses `/api/memory/facts` + `/{id}`) — [T011_memory_facts_browser.md](T011_memory_facts_browser.md)
+- [x] T012: NEW endpoint — semantic explorer: embed query text, VectorSearch memory+search, return neighbors+distance — [T012_semantic_explorer_endpoint.md](T012_semantic_explorer_endpoint.md)
+- [x] T013: Semantic explorer view — query box, top-k neighbor list with cosine distance, links to facts/searches — [T013_semantic_explorer_view.md](T013_semantic_explorer_view.md)
 
 ### Feature: Jobs, Caches, Logs & Stats
 

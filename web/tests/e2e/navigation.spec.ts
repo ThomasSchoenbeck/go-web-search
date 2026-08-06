@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test'
 import { baseUrl } from './fixtures'
 import { seeded } from './fixtures-data'
 
-const sections = ['runs', 'provenance'] as const
+const sections = ['runs', 'provenance', 'facts', 'explore'] as const
 
 test('every nav entry is reachable from every page', async ({ page }) => {
   // Start from a deep view, not the home page, to prove the nav is in the shell.

@@ -26,14 +26,15 @@ test('tracing a URL renders both directions of the chain', async ({ page }) => {
   await expect(page.getByTestId('facts-list')).toContainText('The fixture page says Fixture One.')
 })
 
-test('the seeded database has no vector table, so vector presence is unknown', async ({ page }) => {
+test('vector presence is reported when the store is available', async ({ page }) => {
+  // The fixture seeds an active vector table and embeds the fact, so the view
+  // makes a definite claim rather than the "unknown" degraded one. The degraded
+  // path is covered in Go (TestURLProvenanceDegradesWithoutVectors and
+  // …DegradesDuringMigration) and in Provenance.test.ts.
   await page.goto(baseUrl(`/provenance?url=${encodeURIComponent(fixtureUrl)}`))
 
-  // The honest degraded state: not "not embedded", which would be a claim the
-  // backend never made.
-  await expect(page.getByTestId('vectors-unavailable')).toBeVisible()
-  await expect(page.getByTestId('fact-vector-unknown')).toBeVisible()
-  await expect(page.getByTestId('fact-vector')).toHaveCount(0)
+  await expect(page.getByTestId('vectors-unavailable')).toHaveCount(0)
+  await expect(page.getByTestId('fact-vector')).toHaveText('embedded')
 })
 
 test('provenance links reach the run, SERP and scrape views', async ({ page }) => {

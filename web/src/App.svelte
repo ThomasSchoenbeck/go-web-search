@@ -10,12 +10,18 @@
   import SerpViewer from './views/SerpViewer.svelte'
   import ScrapeDetail from './views/ScrapeDetail.svelte'
   import Provenance from './views/Provenance.svelte'
+  import FactsBrowser from './views/FactsBrowser.svelte'
+  import FactDetail from './views/FactDetail.svelte'
+  import SemanticExplorer from './views/SemanticExplorer.svelte'
 
   onMount(() => startRouter())
 
   // routes.ts is the single source of truth: the nav renders from the same list.
   let route = $derived(resolveRoute($path))
-  let pivotUrl = $derived(new URLSearchParams($search).get('url') ?? '')
+  let params = $derived(new URLSearchParams($search))
+  let pivotUrl = $derived(params.get('url') ?? '')
+  let exploreQuery = $derived(params.get('q') ?? '')
+  let exploreK = $derived(Number(params.get('k')) || 10)
 </script>
 
 <header>
@@ -36,6 +42,12 @@
     <ScrapeDetail id={route.params.id} />
   {:else if route?.name === 'provenance'}
     <Provenance url={pivotUrl} />
+  {:else if route?.name === 'fact-detail'}
+    <FactDetail id={route.params.id} />
+  {:else if route?.name === 'facts'}
+    <FactsBrowser />
+  {:else if route?.name === 'explore'}
+    <SemanticExplorer query={exploreQuery} k={exploreK} />
   {:else if route?.name === 'runs'}
     <RunsList />
   {:else}

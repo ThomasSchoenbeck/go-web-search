@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -157,6 +158,69 @@ func seedTestData(ctx context.Context, store *Store) error {
 	return nil
 }
 
+// stubEmbedder produces a deterministic vector from the text itself, so the
+// semantic explorer can be exercised end to end with no model endpoint running.
+// Nearness is meaningless — it is a hash, not a language model — but identical
+// text always embeds identically, which is what makes the seeded fixtures and
+// the query line up.
+type stubEmbedder struct{}
+
+const stubEmbedDim = 8
+
+func (stubEmbedder) Embed(_ context.Context, texts []string, _ bool, _ string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		out[i] = stubVector(text)
+	}
+	return out, nil
+}
+
+// stubVector spreads a checksum of the text across the dimensions and
+// normalises, so cosine distance stays in its usual range.
+func stubVector(text string) []float32 {
+	vec := make([]float32, stubEmbedDim)
+	for i, r := range text {
+		vec[i%stubEmbedDim] += float32((int(r)%17)+1) / 16
+	}
+	var norm float64
+	for _, v := range vec {
+		norm += float64(v) * float64(v)
+	}
+	if norm == 0 {
+		vec[0] = 1
+		return vec
+	}
+	norm = math.Sqrt(norm)
+	for i := range vec {
+		vec[i] = float32(float64(vec[i]) / norm)
+	}
+	return vec
+}
+
+// seedVectors gives the seeded fact and cached search an embedding under an
+// active vector table, so the explorer has something to find.
+func seedVectors(ctx context.Context, store *Store) error {
+	const table = "vectors_test"
+	if err := store.ensureVectorTable(ctx, table, stubEmbedDim); err != nil {
+		return fmt.Errorf("seeding vector table: %w", err)
+	}
+	if err := store.MetaSet(ctx, metaVectorTable, table); err != nil {
+		return err
+	}
+	seeds := []struct {
+		kind, id, text string
+	}{
+		{ownerMemory, "00000000-0000-7000-8000-000000000009", "The fixture page says Fixture One."},
+		{ownerSearch, "00000000-0000-7000-8000-00000000000a", "fixture term"},
+	}
+	for _, s := range seeds {
+		if err := store.UpsertVector(ctx, table, s.kind, s.id, stubVector(s.text), "stub-embedder", stubEmbedDim); err != nil {
+			return fmt.Errorf("seeding %s vector: %w", s.kind, err)
+		}
+	}
+	return nil
+}
+
 // testServeMode backs `-mode testserve`: the REST + MCP + SPA surface over
 // whatever -data points at, with no Chrome, no job runner and no vector boot.
 // The Playwright harness needs a real listener but only exercises read-only
@@ -165,13 +229,20 @@ func seedTestData(ctx context.Context, store *Store) error {
 func testServeMode(cfg Config, art *artifacts, store *Store, stop context.Context) error {
 	// The Playwright harness sets this so the views have something to render.
 	if os.Getenv("HARVESTER_TEST_SEED") == "1" {
-		if err := seedTestData(context.Background(), store); err != nil {
+		ctx := context.Background()
+		if err := seedTestData(ctx, store); err != nil {
+			return err
+		}
+		if err := seedVectors(ctx, store); err != nil {
 			return err
 		}
 		art.Log.Printf("testserve seeded fixture data")
 	}
 
 	srv := newAPIServer(cfg, newHarvester(cfg, store, art.Log, nil))
+	// No model endpoint is reachable in a test run, so the explorer embeds with
+	// the deterministic stub instead.
+	srv.embed = stubEmbedder{}
 
 	errCh := make(chan error, 1)
 	go func() {

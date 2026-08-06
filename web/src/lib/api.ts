@@ -268,6 +268,83 @@ export function provenanceResource(url: string): Resource<UrlProvenance> {
   return createResource(() => getJson<UrlProvenance>(`/api/provenance?url=${encodeURIComponent(url)}`))
 }
 
+/** GET /api/memory/facts (FactSummary in memory.go). */
+export interface FactSummary {
+  id: string
+  text: string
+  text_chars: number
+  source_url?: string
+  volatility?: string
+  tier?: string
+  hit_count: number
+  created_at?: string
+  expires_at?: string
+}
+
+/** GET /api/memory/facts/{id} (FactDetail in server.go). */
+export interface FactDetail {
+  fact: FactSummary
+  source?: ScrapeSizes
+  /** API path to the raw source page; absent when it is no longer cached. */
+  read_raw?: string
+  note?: string
+}
+
+/** GET /api/explore (ExploreResult in explorer.go). */
+export interface Neighbor {
+  owner_kind: 'memory' | 'search'
+  id: string
+  distance: number
+  similarity: number
+  text: string
+  source_url?: string
+  tier?: string
+  result_count?: number
+}
+
+export interface ExploreResult {
+  query: string
+  k: number
+  /** False when no vector table is active or a re-embed is in flight. */
+  available: boolean
+  note?: string
+  neighbors: Neighbor[]
+  memory_hits: number
+  search_hits: number
+}
+
+export interface FactsQuery {
+  q?: string
+  limit: number
+  offset: number
+}
+
+export function factsResource(query: FactsQuery): Resource<FactSummary[]> {
+  const params = new URLSearchParams()
+  if (query.q) params.set('q', query.q)
+  params.set('limit', String(query.limit))
+  params.set('offset', String(query.offset))
+  return createResource(() =>
+    getJson<{ count: number; facts: FactSummary[] | null }>(`/api/memory/facts?${params}`).then(
+      (body) => body.facts ?? [],
+    ),
+  )
+}
+
+export function factResource(id: string): Resource<FactDetail> {
+  return createResource(() => getJson<FactDetail>(`/api/memory/facts/${encodeURIComponent(id)}`))
+}
+
+export function exploreResource(query: string, k: number): Resource<ExploreResult> {
+  const params = new URLSearchParams({ q: query, k: String(k) })
+  return createResource(() =>
+    getJson<ExploreResult>(`/api/explore?${params}`).then((result) => ({
+      ...result,
+      neighbors: result.neighbors ?? [],
+    })),
+  )
+}
+
 export function runCausalityResource(runId: string): Resource<CausalityGraph> {
   return createResource(() =>
     getJson<CausalityGraph>(`/api/runs/${encodeURIComponent(runId)}/causality`).then((graph) => ({
