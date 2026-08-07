@@ -16,7 +16,14 @@ blocker_note:
 Build the scrape detail view over the existing `GET /api/scrapes/{id}` endpoint,
 which reads the `scrape_cache` row and returns a `ScrapeDetail`. Passing `?raw=1`
 includes the unprocessed `raw_html`; without it the raw field is omitted and the
-cleaned/text content is returned. No backend changes.
+cleaned/text content is returned.
+
+**Correction (found during implementation): this task does require a backend
+change.** It was written as "no backend changes", but `ScrapeDetail` and
+`Store.GetScrape` did not select seven of the fetch-metadata fields listed below
+— `content_hash`, `etag`, `last_modified`, `tier`, `hit_count`, `expires_at`,
+`fetched_at`. The columns already exist on `scrape_cache`; only the struct and
+the SELECT needed extending. The change is additive and read-only.
 
 The view shows, for one scrape id:
 
@@ -56,6 +63,8 @@ HTML only on demand.
 
 - `web/src/views/ScrapeDetail.svelte` [NEW]
 - `web/src/App.svelte`
+- `store.go` — seven cache-metadata fields added to `ScrapeDetail`
+- `scrapecache.go` — the same seven columns added to the `GetScrape` SELECT
 
 ## Dependencies
 

@@ -53,12 +53,36 @@ unavailable.
 - Unit tests (Vitest) cover this view's major functions; `pnpm test` passes.
 - Playwright tests exercise the page and every interactive element — every button, link, and input; `pnpm test:e2e` passes against an isolated throwaway test database that is seeded and fully torn down, leaving no residual test data.
 
+## Note added during implementation
+
+- **`web/package.json` needed no change.** The task allowed either a local helper
+  or a pinned library; PCA is short enough that the helper won, which also means
+  no new package to audit. `web/pnpm-lock.yaml` is untouched.
+- The helper does power iteration **without forming the covariance matrix**: for
+  embeddings the dimension dwarfs the point count, so a d×d covariance (4096² at
+  the real model size) would be far larger than the data it summarises. The
+  second component is found by orthogonalising against the first each iteration
+  rather than deflating the data, which would cost another copy of it.
+- **Responsiveness is a progress state, not a worker** — the task offered either.
+  A worker would add Vite worker plumbing and would not run in jsdom, for a
+  computation the config cap already bounds. The view paints "Projecting N
+  vectors…" and yields before computing.
+- The sample cap comes from `/api/ui-config` and the view requests exactly it, so
+  `projection_sample_cap` is the one place that decides how much is pulled. If
+  the config cannot be read, the view says so rather than guessing a cap.
+- **The seeded fixtures are the degenerate case:** two vectors are rank 1 after
+  centring, so there is no second axis to spread along. Both the helper's unit
+  tests and the e2e specs assert the layout stays finite there — a NaN
+  coordinate would silently drop points off the canvas rather than fail loudly.
+- The view states that distances are indicative: two dimensions cannot carry
+  what the full space knows, and a scatter invites over-reading.
+
 ## Files to Touch
 
 - `web/src/views/ProjectionScatter.svelte` [NEW]
 - `web/src/lib/projection.ts` [NEW]
-- `web/package.json`
 - `web/src/App.svelte`
+- `web/src/lib/api.ts`, `web/src/lib/routes.ts` — the resource and the route/nav entry
 
 ## Dependencies
 

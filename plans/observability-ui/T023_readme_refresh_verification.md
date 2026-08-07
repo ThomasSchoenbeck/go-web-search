@@ -63,6 +63,63 @@ edge), renders all views, and polls jobs/logs with working UI controls.
   polling and respond to the interval/enable controls.
 - `go fmt`, `go vet`, `go test ./...` pass; the frontend builds and lints clean.
 
+## Note added during implementation
+
+**The refresh had to correct facts beyond the UI.** Bringing the README in line
+with reality meant fixing four claims that had gone stale or were wrong:
+
+1. **"Vectors live in a dedicated table with the ANN index."** False, and
+   `vectors.go` had said so all along: the Rust Turso engine has no
+   `libsql_vector_idx`, so similarity search is an exact linear scan. Corrected,
+   with the scaling consequence stated under Known limits.
+2. **Images "land in `scrape_images`."** That table is gone — images are stored
+   inline as JSON on the `scrape_cache` row.
+3. **"Type-checked against stub packages" / "SQL executed against real SQLite
+   3.45" / "Not verified: any of it running."** All three predate the test
+   harness. There is no stubs directory, the dependencies are real, and the Go
+   tests run against a real Turso database while Playwright drives the compiled
+   binary. Replaced with what is actually true, and with a precise statement of
+   what remains unverified (a full `-mode serve` run: Chrome, the job runner and
+   a live model endpoint).
+4. **SIGINT "writes `urls.txt`."** Nothing writes `urls.txt` any more; that
+   described the removed one-shot search mode.
+
+The file map was a third of the source files; it now covers all of them, grouped
+by subsystem.
+
+**Verification actually performed** (recorded in the README's Verification
+status section):
+
+- Built the documented way — `task web`, then `go build .`.
+- Ran the binary over a throwaway data directory and issued 27 HTTP checks with
+  **no `Authorization` header**: the SPA shell and its hashed assets, three deep
+  links through the SPA fallback, every read endpoint the UI uses (including the
+  filtered forms of jobs and logs), and two negative cases proving an
+  unregistered `/api/...` stays a 404 rather than returning `index.html`.
+  All 27 passed; the temp directory was removed afterwards.
+- Confirmed the build-ordering rule **by behaviour**: rebuilt with `web/dist`
+  reduced to its committed `.gitkeep`, and the binary served the 503 "not built"
+  notice while `/api/stats` and `/healthz` kept answering 200. The real build was
+  restored immediately.
+- Polling with its UI controls is covered by the Playwright specs against the
+  real binary (start paused per config, interval dropdown, toggle, and no
+  requests after leaving the view).
+
+**Not verified, and the README says so:** a full `-mode serve` run. It launches
+real Chrome and needs a reachable llama.cpp endpoint, so browser-driven search,
+live scraping, distillation and real embeddings remain covered by unit tests
+only. `-mode testserve` deliberately starts no browser, job runner or vector
+boot.
+
+**One inconsistency found, then fixed on request:** `config.go` defaulted
+`server.addr` to `:8081`, while the shipped `config.toml` and the Vite dev proxy
+both used `:8082` — so with no config file present the dev server proxied `/api`
+to a port nothing was listening on. The compiled default is now `:8082`, since
+every other source of truth already said so (including vite.config.ts's own
+comment, which described the default it did not actually have). A new
+`config_test.go` pins all three together; it was confirmed to fail on drift
+before being kept.
+
 ## Files to Touch
 
 - `README.md`

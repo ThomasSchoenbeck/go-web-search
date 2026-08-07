@@ -46,11 +46,26 @@ rows with their status/attempts/backoff fields, backed by a new store read query
 - An empty queue returns an empty list, not an error.
 - The route is registered in `newAPIServer` and behind the shared `/api` middleware (`withAuth`, a no-op when `api_key` is unset — edge auth).
 
+## Note added during implementation
+
+- The endpoint is `GET /api/jobs` and returns `{jobs, counts}` (`JobsPage`), not a
+  bare list. `counts` is the whole queue by status — every known status present,
+  at zero when nothing holds it — because T015's pending/running/failed
+  breakdown must describe the queue, not the filtered page it is showing.
+- Payload is returned as the stored string. Job payloads are small JSON objects
+  written by the enqueuers; the view renders them as text, never as markup.
+- The listing bound (`limit` in [1,500], default 50) is `clampPage` in `store.go`,
+  shared with T016 and T018 rather than repeated three times.
+- `seedTestData` gained a failed embed (3 attempts), a done embed and a running
+  cleanup with a lock, so the filters and the breakdown have every case.
+
 ## Files to Touch
 
 - `jobstore.go`
 - `server.go`
-- `jobstore_test.go`
+- `store.go` — the shared `clampPage` listing bound
+- `testsupport.go` — jobs covering every status and three types
+- `jobstore_test.go` [NEW]
 
 ## Dependencies
 

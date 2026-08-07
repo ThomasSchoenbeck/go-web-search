@@ -33,6 +33,32 @@ type Config struct {
 	Retention RetentionConfig `toml:"retention"`
 	Cache     TierConfig      `toml:"cache"`
 	Memory    MemoryConfig    `toml:"memory"`
+
+	Observability ObservabilityConfig `toml:"observability"`
+}
+
+// ObservabilityConfig holds the tunables the observability SPA reads at startup
+// from GET /api/ui-config. Everything here is non-secret by construction: the
+// assumed deployment leaves api_key unset and delegates auth to an edge, so
+// that endpoint answers anyone who can reach the port. Never add a credential
+// to this struct.
+type ObservabilityConfig struct {
+	// PollInterval and PollEnabled seed the SPA's live-refresh defaults for the
+	// jobs and logs views. The UI can override both for the current session; it
+	// never writes back here.
+	PollInterval Duration `toml:"poll_interval"`
+	PollEnabled  bool     `toml:"poll_enabled"`
+	// ProjectionSampleCap bounds how many embedding vectors the 2-D projection
+	// view may pull. Vector search is a linear scan, so this is a real limit.
+	ProjectionSampleCap int `toml:"projection_sample_cap"`
+	// CausalityMaxURLs bounds the whole-run causality graph. A broad run can
+	// find thousands of URLs, each dragging its scrape and facts into the
+	// response; past this many the graph is truncated and says so.
+	CausalityMaxURLs int `toml:"causality_max_urls"`
+	// JobTimingSample bounds how many finished jobs /api/stats averages a
+	// completion time over. The whole history would be an unbounded scan for a
+	// single number; 0 skips the timing entirely.
+	JobTimingSample int `toml:"job_timing_sample"`
 }
 
 // RetentionConfig governs shrinking the database beyond the tier expiry: one
@@ -255,7 +281,10 @@ func defaultConfig() Config {
 			SnippetChars:      2000,
 		},
 		Server: ServerConfig{
-			Addr:         "0.0.0.0:8081",
+			// Must match config.toml and the SPA's dev proxy target
+			// (web/vite.config.ts): with no config file present this default is
+			// the listener the dev server proxies to.
+			Addr:         "0.0.0.0:8082",
 			ReadTimeout:  Duration{30 * time.Second},
 			WriteTimeout: Duration{180 * time.Second},
 		},
@@ -300,6 +329,13 @@ func defaultConfig() Config {
 			TopK:                8,
 			Gate3Enabled:        true,
 			RememberDefault:     "short",
+		},
+		Observability: ObservabilityConfig{
+			PollInterval:        Duration{5 * time.Second},
+			PollEnabled:         false,
+			ProjectionSampleCap: 2000,
+			CausalityMaxURLs:    200,
+			JobTimingSample:     200,
 		},
 	}
 }

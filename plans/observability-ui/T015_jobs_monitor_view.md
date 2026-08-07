@@ -52,10 +52,25 @@ by polling.
 - Unit tests (Vitest) cover this view's major functions; `pnpm test` passes.
 - Playwright tests exercise the page and every interactive element — every button, link, and input; `pnpm test:e2e` passes against an isolated throwaway test database that is seeded and fully torn down, leaving no residual test data.
 
+## Note added during implementation
+
+The polling controls are a shared component, `web/src/components/PollControls.svelte`,
+not view-local code: T019 needs exactly the same thing (seed from
+`/api/ui-config`, interval dropdown, on/off toggle, stop on unmount), and two
+copies of a lifecycle that leaks timers when it is got wrong is worse than one.
+It owns the poller and takes the view's `reload` as its `task` prop. Its testids
+(`poll-toggle`, `poll-interval`, `poll-status`) are unprefixed — only one
+polling view is ever mounted at a time.
+
+The breakdown renders from the endpoint's whole-queue `counts` (T014), so
+filtering the table does not move it.
+
 ## Files to Touch
 
 - `web/src/views/JobsMonitor.svelte` [NEW]
+- `web/src/components/PollControls.svelte` [NEW] — shared with T019
 - `web/src/App.svelte`
+- `web/src/lib/api.ts`, `web/src/lib/routes.ts` — the resource and the route/nav entry
 
 ## Dependencies
 

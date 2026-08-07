@@ -1,6 +1,6 @@
 # Plan: Observability & Data-Inspection UI
 
-> Created: 2026-08-05 | Last Updated: 2026-08-05
+> Created: 2026-08-05 | Last Updated: 2026-08-06 | **Complete: T001–T027 all `[x]`**
 
 A web UI, served by the existing `-mode serve` listener, for inspecting
 everything the harvester stores and does: runs, per-engine searches and their raw
@@ -53,7 +53,11 @@ binary, single service, no separate deployable.
 
 Views over data that already has a GET endpoint reuse it unchanged: `/api/runs`,
 `/api/runs/{id}`, `/api/runs/{id}/urls|searches|scrapes`, `/api/searches/{id}/raw`,
-`/api/scrapes/{id}?raw=1`, `/api/memory/facts` + `/{id}`, `/api/stats`. New
+`/api/memory/facts` + `/{id}`, `/api/stats`. **Exception found in T008:**
+`/api/scrapes/{id}` was *not* reusable unchanged — `ScrapeDetail` omitted seven
+cache-metadata fields the scrape view has to show (`content_hash`, `etag`,
+`last_modified`, `tier`, `hit_count`, `expires_at`, `fetched_at`), so T008 added
+them to the struct and the SELECT. Read-only and additive. New
 read-only endpoints are needed for: provenance-for-a-URL, the jobs list, the
 `search_cache` and `scrape_cache` browsers, the logs query (over the separate log
 DB), the semantic-explorer embed+search, and the vector-projection dump. `/api/stats`
@@ -81,53 +85,57 @@ fixtures); every view and endpoint task then ships its own tests.
 
 ### Feature: Foundation — Build, Embed & Serving
 
-- [ ] T001: Document the Observability UI (what it is, build step, embedded serving) in README — [T001_readme_observability_ui.md](T001_readme_observability_ui.md)
-- [ ] T002: Scaffold the Svelte + Vite SPA under `web/` — pnpm, pinned versions, `pnpm audit` gate, dev proxy — [T002_svelte_vite_scaffold.md](T002_svelte_vite_scaffold.md)
-- [ ] T003: `go:embed` the Vite `dist/` + static serving + SPA fallback routing (dev vs embedded) — [T003_goembed_dist_spa_serving.md](T003_goembed_dist_spa_serving.md)
-- [ ] T004: Access model — edge auth (no app auth) + expose non-secret UI config (poll defaults, projection cap) from `config.toml` — [T004_spa_auth_bearer.md](T004_spa_auth_bearer.md)
-- [ ] T005: Shared frontend API-read layer (typed same-origin fetch, loading/error, config-driven polling helper) — [T005_frontend_api_read_layer.md](T005_frontend_api_read_layer.md)
-- [ ] T024: Test harness — Vitest unit + Playwright e2e, isolated test DB + teardown fixtures — [T024_test_harness.md](T024_test_harness.md)
+- [x] T001: Document the Observability UI (what it is, build step, embedded serving) in README — [T001_readme_observability_ui.md](T001_readme_observability_ui.md)
+- [x] T002: Scaffold the Svelte + Vite SPA under `web/` — pnpm, pinned versions, `pnpm audit` gate, dev proxy — [T002_svelte_vite_scaffold.md](T002_svelte_vite_scaffold.md)
+- [x] T003: `go:embed` the Vite `dist/` + static serving + SPA fallback routing (dev vs embedded) — [T003_goembed_dist_spa_serving.md](T003_goembed_dist_spa_serving.md)
+- [x] T004: Access model — edge auth (no app auth) + expose non-secret UI config (poll defaults, projection cap) from `config.toml` — [T004_spa_auth_bearer.md](T004_spa_auth_bearer.md)
+- [x] T005: Shared frontend API-read layer (typed same-origin fetch, loading/error, config-driven polling helper) — [T005_frontend_api_read_layer.md](T005_frontend_api_read_layer.md)
+- [x] T024: Test harness — Vitest unit + Playwright e2e, isolated test DB + teardown fixtures — [T024_test_harness.md](T024_test_harness.md)
 
 ### Feature: Core Views — Runs, Searches & SERPs
 
-- [ ] T006: Runs list + run detail view (reuses `/api/runs`, `/api/runs/{id}`, `/urls`, `/searches`, `/scrapes`) — [T006_runs_list_detail_view.md](T006_runs_list_detail_view.md)
-- [ ] T007: Searches view + raw SERP HTML viewer (reuses `/api/runs/{id}/searches`, `/api/searches/{id}/raw`) — [T007_searches_serp_viewer.md](T007_searches_serp_viewer.md)
+- [x] T006: Runs list + run detail view (reuses `/api/runs`, `/api/runs/{id}`, `/urls`, `/searches`, `/scrapes`) — [T006_runs_list_detail_view.md](T006_runs_list_detail_view.md)
+- [x] T007: Searches view + raw SERP HTML viewer (reuses `/api/runs/{id}/searches`, `/api/searches/{id}/raw`) — [T007_searches_serp_viewer.md](T007_searches_serp_viewer.md)
 
 ### Feature: Core Views — Scrapes
 
-- [ ] T008: Scrape detail view — raw/clean/text toggle + images + fetch metadata (reuses `/api/scrapes/{id}?raw=1`) — [T008_scrape_detail_view.md](T008_scrape_detail_view.md)
+- [x] T008: Scrape detail view — raw/clean/text toggle + images + fetch metadata (reuses `/api/scrapes/{id}?raw=1`) — [T008_scrape_detail_view.md](T008_scrape_detail_view.md)
+
+### Feature: Navigation Shell
+
+- [x] T027: Navigation shell — persistent nav over every built view, active-route marking, one source of truth for routes — [T027_navigation_shell.md](T027_navigation_shell.md)
 
 ### Feature: Provenance / Causality
 
-- [ ] T009: NEW endpoint — provenance pivot for a URL (backward searches+rank, forward scrape→facts→vectors) — [T009_provenance_url_endpoint.md](T009_provenance_url_endpoint.md)
-- [ ] T010: Provenance view — pivot on a URL, render the backward/forward chain; link from facts (reverse) — [T010_provenance_view.md](T010_provenance_view.md)
-- [ ] T025: NEW endpoint — whole-run causality graph (searches→urls→scrapes→facts for a run) — [T025_run_causality_endpoint.md](T025_run_causality_endpoint.md)
-- [ ] T026: Run causality graph view (render the run-level chain) — [T026_run_causality_view.md](T026_run_causality_view.md)
+- [x] T009: NEW endpoint — provenance pivot for a URL (backward searches+rank, forward scrape→facts→vectors) — [T009_provenance_url_endpoint.md](T009_provenance_url_endpoint.md)
+- [x] T010: Provenance view — pivot on a URL, render the backward/forward chain; link from facts (reverse) — [T010_provenance_view.md](T010_provenance_view.md)
+- [x] T025: NEW endpoint — whole-run causality graph (searches→urls→scrapes→facts for a run) — [T025_run_causality_endpoint.md](T025_run_causality_endpoint.md)
+- [x] T026: Run causality graph view (render the run-level chain) — [T026_run_causality_view.md](T026_run_causality_view.md)
 
 ### Feature: Memory & Semantic Explorer
 
-- [ ] T011: Memory facts browser view (reuses `/api/memory/facts` + `/{id}`) — [T011_memory_facts_browser.md](T011_memory_facts_browser.md)
-- [ ] T012: NEW endpoint — semantic explorer: embed query text, VectorSearch memory+search, return neighbors+distance — [T012_semantic_explorer_endpoint.md](T012_semantic_explorer_endpoint.md)
-- [ ] T013: Semantic explorer view — query box, top-k neighbor list with cosine distance, links to facts/searches — [T013_semantic_explorer_view.md](T013_semantic_explorer_view.md)
+- [x] T011: Memory facts browser view (reuses `/api/memory/facts` + `/{id}`) — [T011_memory_facts_browser.md](T011_memory_facts_browser.md)
+- [x] T012: NEW endpoint — semantic explorer: embed query text, VectorSearch memory+search, return neighbors+distance — [T012_semantic_explorer_endpoint.md](T012_semantic_explorer_endpoint.md)
+- [x] T013: Semantic explorer view — query box, top-k neighbor list with cosine distance, links to facts/searches — [T013_semantic_explorer_view.md](T013_semantic_explorer_view.md)
 
 ### Feature: Jobs, Caches, Logs & Stats
 
-- [ ] T014: NEW endpoint — jobs list with status/type filters + pagination over the `jobs` table — [T014_jobs_list_endpoint.md](T014_jobs_list_endpoint.md)
-- [ ] T015: Jobs queue monitor view (pending/running/failed, attempts, backoff; polling) — [T015_jobs_monitor_view.md](T015_jobs_monitor_view.md)
-- [ ] T016: NEW endpoints — `search_cache` + `scrape_cache` browsers (tier/expiry/hit_count, filters, pagination) — [T016_cache_browser_endpoints.md](T016_cache_browser_endpoints.md)
-- [ ] T017: Cache browser views (search_cache + scrape_cache) — [T017_cache_browser_views.md](T017_cache_browser_views.md)
-- [ ] T018: NEW endpoint — logs query over the separate log DB (run_id/level/source filters, pagination) + wire log-read into the server — [T018_logs_query_endpoint.md](T018_logs_query_endpoint.md)
-- [ ] T019: Logs viewer view (filters + polling tail) — [T019_logs_viewer_view.md](T019_logs_viewer_view.md)
-- [ ] T020: Extend `/api/stats` with model+dim + migration state; Stats dashboard view — [T020_stats_dashboard.md](T020_stats_dashboard.md)
+- [x] T014: NEW endpoint — jobs list with status/type filters + pagination over the `jobs` table — [T014_jobs_list_endpoint.md](T014_jobs_list_endpoint.md)
+- [x] T015: Jobs queue monitor view (pending/running/failed, attempts, backoff; polling) — [T015_jobs_monitor_view.md](T015_jobs_monitor_view.md)
+- [x] T016: NEW endpoints — `search_cache` + `scrape_cache` browsers (tier/expiry/hit_count, filters, pagination) — [T016_cache_browser_endpoints.md](T016_cache_browser_endpoints.md)
+- [x] T017: Cache browser views (search_cache + scrape_cache) — [T017_cache_browser_views.md](T017_cache_browser_views.md)
+- [x] T018: NEW endpoint — logs query over the separate log DB (run_id/level/source filters, pagination) + wire log-read into the server — [T018_logs_query_endpoint.md](T018_logs_query_endpoint.md)
+- [x] T019: Logs viewer view (filters + polling tail) — [T019_logs_viewer_view.md](T019_logs_viewer_view.md)
+- [x] T020: Extend `/api/stats` with model+dim + migration state; Stats dashboard view — [T020_stats_dashboard.md](T020_stats_dashboard.md)
 
 ### Feature: Embeddings 2-D Projection (later phase)
 
-- [ ] T021: NEW endpoint — vector projection data dump (memory + search owners) for scatter rendering — [T021_vector_projection_endpoint.md](T021_vector_projection_endpoint.md)
-- [ ] T022: 2-D projection scatter view (client-side PCA) — [T022_projection_scatter_view.md](T022_projection_scatter_view.md)
+- [x] T021: NEW endpoint — vector projection data dump (memory + search owners) for scatter rendering — [T021_vector_projection_endpoint.md](T021_vector_projection_endpoint.md)
+- [x] T022: 2-D projection scatter view (client-side PCA) — [T022_projection_scatter_view.md](T022_projection_scatter_view.md)
 
 ### Feature: Documentation & Verification
 
-- [ ] T023: README refresh (final UI, build, embedded serving) + end-to-end verification — [T023_readme_refresh_verification.md](T023_readme_refresh_verification.md)
+- [x] T023: README refresh (final UI, build, embedded serving) + end-to-end verification — [T023_readme_refresh_verification.md](T023_readme_refresh_verification.md)
 
 ## Implementation Order & Phases
 
@@ -149,8 +157,11 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
 7. T007 — Searches view + raw SERP HTML viewer over the existing search endpoints (T006)
 8. T008 — Scrape detail view: raw/clean/text toggle, images, fetch metadata over `/api/scrapes/{id}` (T005)
 
-**Phase 3: Provenance / Causality**
+**Phase 3: Navigation & Provenance / Causality**
 
+8a. T027 — Navigation shell: persistent nav over the built views, one shared route
+definition. Placed here, before the remaining views, so each later view task
+registers its entry as it lands rather than leaving views URL-only (T006)
 9. T009 — NEW provenance-for-a-URL endpoint: backward searches+rank, forward scrape→facts→vectors, plus store queries (T005)
 10. T010 — Provenance view: pivot on a URL, render the backward/forward chain; fact→source reverse links here (T009)
 10a. T025 — NEW whole-run causality endpoint: assemble searches→urls→scrapes→facts for a run (T009)
@@ -203,6 +214,13 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
   holds only the main `Store`, not the log DB handle. T018 adds a read query over
   the separate log database AND wires that read access into the server — flag this
   as touching serve-mode wiring (`main.go` / `newAPIServer`), not just `server.go`.
+  **Landed as** a `logs *LogStore` parameter on `newAPIServer`/`serveMode`/
+  `serveWithBrowser` plus both test entry points, and `GET /api/logs`.
+- **The log database carries the test server's own lines (found in T018/T019).**
+  `dbLogWriter` tees the artifacts logger into the log DB, so a `-mode testserve`
+  process writes its startup lines there under *its own* run id, alongside the
+  fixtures. This is the `runs`-count trap again: **never assert a total log-line
+  count in e2e** — pivot on the seeded run id or on fixture message text.
 - **Provenance — full scope (T009/T010 + T025/T026 + a link from T011).** Confirmed
   to cover all three shapes. (1) **URL pivot** (T009 endpoint, T010 view): backward
   via `search_urls` (search_id, url_id, rank) joined to `searches`; forward via
@@ -229,6 +247,20 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
   owner kinds and adds NO new Go dependency; the T022 view computes a **PCA**
   projection to 2-D in the browser (fast, deterministic, minimal/no JS dep — not
   UMAP/t-SNE). The sample cap is exposed in `config.toml` rather than hardcoded.
+  **Landed with no dependency change at all** — neither `go.mod` nor
+  `package.json` moved. PCA is a local helper (`web/src/lib/projection.ts`) doing
+  power iteration without ever forming the d×d covariance matrix, which at real
+  embedding dimensions would be larger than the data it summarises.
+  Responsiveness is a progress state rather than a worker; the config cap already
+  bounds the work, and a worker would not run under jsdom.
+- **`vector_extract()` IS available on the Rust Turso engine (found in T021).**
+  vectors.go lists what the engine lacks (`libsql_vector_idx`, `vector_top_k`)
+  but was silent on extraction. Probed against the real engine:
+  `vector_extract(embedding)` returns the same `'[a,b,c]'` text `vector32()`
+  parses, which is how T021 reads embeddings back out of an `F32_BLOB` column.
+  `parseVectorLiteral` in `vectors.go` is its inverse. Decoding the blob bytes
+  directly also works (little-endian float32) but assumes a layout the engine
+  never documented — don't.
 - **Vectors live in a generation table (T012/T021).** The active table name comes
   from `system_meta` (`metaVectorTable`); during a re-embed migration semantic
   reads are unavailable. The explorer and projection must degrade gracefully
@@ -244,6 +276,13 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
   that crosses into non-read-only territory, present hit *counts* and tier
   distributions instead of a computed rate — resolve this in the task before
   building. Job timings derive from `created_at`/`updated_at`/`locked_at`/`attempts`.
+  **RESOLVED in T020: option (a), counts not rates.** A miss leaves nothing
+  behind to count, and adding lookup counters would be a write on every cache
+  read — outside read-only v1. `/api/stats` carries rows, tier distribution,
+  expired, rows-reused and total-hits per cache, and the dashboard states why
+  there is no rate rather than leaving the absence unexplained. Job timing is
+  averaged over the most recent `observability.job_timing_sample` finished jobs
+  (default 200; 0 disables), because the whole history is an unbounded scan.
 - **Dev vs. embedded serving (T002/T003).** In development the SPA runs under the
   Vite dev server proxied to the serve listener; in production the built `dist/` is
   embedded via `go:embed` and served directly, with an SPA fallback so client-side
@@ -283,6 +322,27 @@ order; a later phase should not start until the tasks it depends on are `[x]`.
   changes values only for the current moment via direct controls (a dropdown for
   the interval, a toggle button for polling); it does not write back to config.
   With edge auth there is no bearer or token entry to store.
+- **Shared frontend machinery landed in Phase 2 (no task owned it).** Three
+  modules the later view tasks all depend on were added while building T006–T008,
+  because the plan assigned them to no task: `web/src/lib/router.ts` (the
+  History-API router the routing decision implies — Svelte ships none),
+  `web/src/lib/format.ts` (duration/timestamp/truncate display helpers), and
+  `web/src/lib/apiStub.ts` (test-only fetch stub keyed by path *and* query).
+  **Every later view task must register its route** — in the match chain in
+  `web/src/App.svelte` until T027 lands, in the shared route definition after —
+  add its navigation entry (T027) and its `data-testid` hooks. No view task
+  hand-rolls fetching, formatting or routing. **Phase 5 added a fourth shared
+  piece:** `web/src/components/PollControls.svelte` (T015), which owns the
+  poller for both live views — seeded from `/api/ui-config`, with the interval
+  dropdown, the on/off toggle and stop-on-unmount in one place.
+- **The e2e seed is a shared, growing fixture.** `seedTestData` in
+  `testsupport.go` (T024) writes the fixture dataset every Playwright run reads,
+  and `web/tests/e2e/fixtures-data.ts` exports the fixed ids. Tasks that add a
+  view over data the seed does not yet contain must extend it there rather than
+  seeding per-spec. The log database was a known gap here until T018 added
+  `seedTestLogs` — a **second** seeding function, because the log DB is a
+  separate file with its own handle. Phase 5 also grew the main seed: jobs
+  covering every status, and a long-tier row in each cache.
 - **Tone/convention parity.** Task files follow the `plans/cache-memory/`
   conventions exactly: the frontmatter block, the Description/Goal/How to
   Verify/Files to Touch/Dependencies sections, `[NEW]` markers on new files,

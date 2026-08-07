@@ -45,11 +45,19 @@ detail and provenance.
 - Unit tests (Vitest) cover this view's major functions; `pnpm test` passes.
 - Playwright tests exercise the page and every interactive element — every button, link, and input; `pnpm test:e2e` passes against an isolated throwaway test database that is seeded and fully torn down, leaving no residual test data.
 
+## Note added during implementation
+
+The two views live at `/cache/searches` and `/cache/scrapes` and share one nav
+entry ("Caches", section `cache`), with a link across from each to the other —
+`routes.test.ts` requires every route section to have a nav entry, and two
+top-level entries for one concept would crowd the shell.
+
 ## Files to Touch
 
 - `web/src/views/SearchCacheBrowser.svelte` [NEW]
 - `web/src/views/ScrapeCacheBrowser.svelte` [NEW]
 - `web/src/App.svelte`
+- `web/src/lib/api.ts`, `web/src/lib/routes.ts` — the resources and the routes/nav entry
 
 ## Dependencies
 

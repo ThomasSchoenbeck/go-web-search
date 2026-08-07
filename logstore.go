@@ -143,6 +143,77 @@ func (l *LogStore) Close() (dropped int64, err error) {
 	return l.dropped.Load(), l.db.Close()
 }
 
+// ---- read path, for the observability UI ----
+
+// LogEntry is one stored log line.
+type LogEntry struct {
+	ID        string `json:"id"`
+	RunID     string `json:"run_id,omitempty"`
+	Level     string `json:"level"`
+	Source    string `json:"source,omitempty"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"created_at"`
+}
+
+// LogQuery narrows a log read. An empty field is not filtered on.
+type LogQuery struct {
+	RunID  string
+	Level  string
+	Source string
+	Limit  int
+	Offset int
+}
+
+// Query reads log lines newest-first, so the viewer reads as a tail. The store
+// was write-only until the observability UI needed to show what it had written;
+// this is the only read path, and it reads nothing the batching writer holds.
+func (l *LogStore) Query(ctx context.Context, q LogQuery) ([]LogEntry, error) {
+	limit, offset := clampPage(q.Limit, q.Offset)
+	query := `SELECT id, run_id, level, source, message, created_at FROM logs`
+	var (
+		where []string
+		args  []any
+	)
+	if q.RunID != "" {
+		where = append(where, `run_id = ?`)
+		args = append(args, q.RunID)
+	}
+	if q.Level != "" {
+		where = append(where, `level = ?`)
+		args = append(args, q.Level)
+	}
+	if q.Source != "" {
+		where = append(where, `source = ?`)
+		args = append(args, q.Source)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	// id is a UUIDv7, so it breaks ties in creation order rather than randomly
+	// when a batch writes several lines within the same timestamp.
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := l.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LogEntry
+	for rows.Next() {
+		var e LogEntry
+		var runID, source sql.NullString
+		if err := rows.Scan(&e.ID, &runID, &e.Level, &source, &e.Message, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.RunID = runID.String
+		e.Source = source.String
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // dbLogWriter tees the existing console/file logger into the log database, so
 // every line already being written lands in both places without touching a
 // single call site.
