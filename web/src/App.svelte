@@ -30,9 +30,14 @@
   let exploreK = $derived(Number(params.get('k')) || 10)
 </script>
 
-<header>
-  <a href="/runs" data-testid="nav-home">Observability UI</a>
+<header class="shell">
+  <a class="brand" href="/runs" data-testid="nav-home">
+    <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="wordmark">Observability UI</span>
+  </a>
   <Nav />
+  <!-- Read-only by design; the badge says so rather than the docs alone. -->
+  <span class="mode"><span class="dot" aria-hidden="true"></span>read-only</span>
 </header>
 
 <main>
@@ -76,3 +81,83 @@
     </section>
   {/if}
 </main>
+
+<style>
+  .shell {
+    display: flex;
+    align-items: stretch;
+    height: 52px;
+    background: linear-gradient(var(--panel-2), oklch(0.205 0.014 265));
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 20px;
+    color: var(--text);
+    text-decoration: none;
+    border: none;
+    border-right: 1px solid var(--line);
+  }
+
+  /* Three bars, not a logo: a level meter is what this thing actually is. */
+  .mark {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 14px;
+  }
+
+  .mark i {
+    display: block;
+    width: 3px;
+  }
+
+  .mark i:nth-child(1) {
+    height: 9px;
+    background: var(--green);
+  }
+
+  .mark i:nth-child(2) {
+    height: 14px;
+    background: var(--cyan);
+  }
+
+  .mark i:nth-child(3) {
+    height: 6px;
+    background: var(--violet);
+  }
+
+  .wordmark {
+    font-weight: 600;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .mode {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px;
+    margin-left: auto;
+    border-left: 1px solid var(--line);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+  }
+</style>

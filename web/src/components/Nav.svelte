@@ -25,15 +25,47 @@
 </nav>
 
 <style>
+  nav {
+    display: flex;
+  }
+
   ul {
     display: flex;
-    gap: 1rem;
+    gap: 0;
     list-style: none;
     padding: 0;
     margin: 0;
   }
+
+  li {
+    display: flex;
+  }
+
+  a {
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    color: var(--dim);
+    text-decoration: none;
+    border: none;
+    font-size: 11.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    /* Reserve the indicator so the row does not shift on activation. */
+    box-shadow: inset 0 -2px 0 transparent;
+    transition:
+      color 0.12s ease,
+      background 0.12s ease;
+  }
+
+  a:hover {
+    color: var(--text);
+    background: oklch(1 0 0 / 0.04);
+  }
+
   a.active {
-    font-weight: bold;
-    text-decoration: underline;
+    color: var(--text);
+    background: var(--panel-3);
+    box-shadow: inset 0 -2px 0 var(--green);
   }
 </style>

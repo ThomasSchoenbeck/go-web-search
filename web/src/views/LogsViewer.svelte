@@ -52,12 +52,24 @@
   let filtered = $derived(Boolean(level || runId || source))
 </script>
 
-<section>
-  <h1>Logs</h1>
+<section class="logs">
+  <div class="head">
+    <h1>Logs</h1>
+    <PollControls task={() => logs.reload()} />
+  </div>
 
-  <PollControls task={() => logs.reload()} />
-
-  <form onsubmit={submitFilters}>
+  <!-- One filter bar: level, run, source and the actions read as a single control strip. -->
+  <form class="filters" onsubmit={submitFilters}>
+    <label>
+      Level
+      <select data-testid="logs-level" value={level} onchange={changeLevel}>
+        <option value="">any</option>
+        {#each levels as name (name)}
+          <option value={name}>{name}</option>
+        {/each}
+      </select>
+    </label>
+    <span class="sep" aria-hidden="true"></span>
     <label>
       Run id
       <input type="search" data-testid="logs-run" placeholder="exact run id" bind:value={runDraft} />
@@ -66,63 +78,54 @@
       Source
       <input type="search" data-testid="logs-source" placeholder="e.g. harvester" bind:value={sourceDraft} />
     </label>
-    <button type="submit" data-testid="logs-submit">Filter</button>
-    <button type="button" data-testid="logs-clear" onclick={clearFilters}>Clear</button>
+    <button class="primary" type="submit" data-testid="logs-submit">Filter</button>
+    <button class="ghost" type="button" data-testid="logs-clear" onclick={clearFilters}>Clear</button>
+    <span class="count">{rows.length} lines · newest first</span>
   </form>
-
-  <label>
-    Level
-    <select data-testid="logs-level" value={level} onchange={changeLevel}>
-      <option value="">any</option>
-      {#each levels as name (name)}
-        <option value={name}>{name}</option>
-      {/each}
-    </select>
-  </label>
 
   {#if $logs.loading && !$logs.data}
     <p data-testid="logs-loading">Loading logs…</p>
   {/if}
   {#if $logs.error}
-    <p data-testid="logs-error">Could not load logs: {$logs.error.message}</p>
+    <p class="bad" data-testid="logs-error">Could not load logs: {$logs.error.message}</p>
   {/if}
 
   {#if $logs.data}
     {#if rows.length === 0}
-      <p data-testid="logs-empty">
+      <p class="empty" data-testid="logs-empty">
         {filtered ? 'No log lines match this filter.' : 'Nothing has been logged yet.'}
       </p>
     {:else}
       <table data-testid="logs-table">
         <thead>
           <tr>
-            <th>When</th>
-            <th>Level</th>
-            <th>Source</th>
-            <th>Run</th>
+            <th class="c-when">When</th>
+            <th class="c-level">Level</th>
+            <th class="c-source">Source</th>
+            <th class="c-run">Run</th>
             <th>Message</th>
           </tr>
         </thead>
         <tbody>
           {#each rows as entry (entry.id)}
             <tr data-testid="log-row" class="level-{entry.level}">
-              <td>{formatTimestamp(entry.created_at)}</td>
-              <td data-testid="log-level">{entry.level}</td>
-              <td>{entry.source ?? '—'}</td>
-              <td>
+              <td class="c-when">{formatTimestamp(entry.created_at)}</td>
+              <td class="c-level" data-testid="log-level">{entry.level}</td>
+              <td class="c-source">{entry.source ?? '—'}</td>
+              <td class="c-run">
                 {#if entry.run_id}
                   <a href="/runs/{entry.run_id}" data-testid="log-run-link">{truncate(entry.run_id, 12)}</a>
                 {:else}
                   —
                 {/if}
               </td>
-              <td data-testid="log-message">{entry.message}</td>
+              <td class="msg" data-testid="log-message">{entry.message}</td>
             </tr>
           {/each}
         </tbody>
       </table>
 
-      <p>
+      <p class="pager">
         <button
           type="button"
           data-testid="logs-prev"
@@ -146,15 +149,145 @@
 </section>
 
 <style>
-  /* Level is what the eye scans for, so it is the only thing coloured. */
+  .head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 14px;
+  }
+
+  .head :global(h1) {
+    margin: 0;
+  }
+
+  .filters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 8px 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+  }
+
+  .filters .sep {
+    width: 1px;
+    height: 22px;
+    background: var(--line);
+  }
+
+  .filters input {
+    width: 190px;
+  }
+
+  .filters .primary {
+    background: var(--cyan);
+    border-color: var(--cyan);
+    color: var(--bg);
+  }
+
+  .filters .ghost {
+    background: transparent;
+    color: var(--muted);
+  }
+
+  .count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  table {
+    margin-top: 0;
+    table-layout: fixed;
+  }
+
+  /* Time is fixed-width and abbreviated; the message gets everything left. */
+  .c-when {
+    width: 96px;
+  }
+  .c-level {
+    width: 74px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .c-source {
+    width: 100px;
+  }
+  .c-run {
+    width: 110px;
+  }
+
+  tbody .c-when,
+  tbody .c-source {
+    color: var(--muted);
+  }
+
+  .msg {
+    color: oklch(0.86 0.008 265);
+    word-break: break-word;
+  }
+
+  thead th:first-child,
+  tbody td:first-child {
+    padding-left: 14px;
+  }
+
+  /* A 2px gutter on the row carries the level, so the eye scans one edge
+     instead of reading a column. Level text is coloured to match. */
+  tbody td:first-child {
+    border-left: 2px solid var(--line-strong);
+  }
+
+  .level-error td:first-child {
+    border-left-color: var(--red);
+  }
   .level-error td {
-    color: #b00020;
-    font-weight: bold;
+    background: oklch(0.72 0.16 25 / 0.07);
   }
-  .level-warn td {
-    color: #8a6100;
+  .level-error .c-level,
+  .level-error .msg {
+    color: oklch(0.78 0.15 25);
   }
-  .level-notice td {
-    color: #00548a;
+
+  .level-warn td:first-child {
+    border-left-color: var(--amber);
+  }
+  .level-warn .c-level {
+    color: oklch(0.84 0.14 90);
+  }
+
+  .level-notice td:first-child {
+    border-left-color: var(--cyan);
+  }
+  .level-notice .c-level {
+    color: oklch(0.84 0.14 190);
+  }
+
+  .level-info .c-level {
+    color: var(--dim);
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0 0;
+  }
+
+  .pager span {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  .empty {
+    color: var(--dim);
+  }
+
+  .bad {
+    color: var(--red);
   }
 </style>

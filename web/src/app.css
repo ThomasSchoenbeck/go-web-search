@@ -1,0 +1,271 @@
+/**
+ * Global theme for the observability UI — "Rack" instrument-panel direction.
+ *
+ * Deliberately element-first: almost every view is plain <section>/<h1>/<h2>/
+ * <table>/<ul>/<label>/<button> markup with no classes, so styling the elements
+ * here dresses all sixteen views without touching their .svelte files. Only the
+ * shell (App/Nav) and the stats dashboard carry their own component styles.
+ */
+
+:root {
+  /* Ground */
+  --bg: oklch(0.19 0.014 265);
+  --panel: oklch(0.22 0.016 265);
+  --panel-2: oklch(0.245 0.016 265);
+  --panel-3: oklch(0.27 0.016 265);
+  --line: oklch(0.285 0.016 265);
+  --line-strong: oklch(0.31 0.016 265);
+
+  /* Ink */
+  --text: oklch(0.94 0.008 265);
+  --muted: oklch(0.68 0.012 265);
+  --dim: oklch(0.6 0.014 265);
+
+  /* Signals — one lightness, one chroma, hue is the only variable. */
+  --cyan: oklch(0.8 0.14 190);
+  --green: oklch(0.8 0.14 150);
+  --violet: oklch(0.8 0.14 300);
+  --amber: oklch(0.8 0.14 90);
+  --red: oklch(0.72 0.16 25);
+
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+}
+
+body {
+  color: var(--text);
+  font: 400 12.5px/1.55 var(--mono);
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- shell ---------- */
+
+main {
+  padding: 0 0 48px;
+}
+
+main > section {
+  padding: 22px 24px 0;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font: 600 28px/1.2 var(--sans);
+  letter-spacing: -0.03em;
+}
+
+h2 {
+  margin: 26px 0 12px;
+  font: 400 10.5px/1.4 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+p {
+  margin: 10px 0;
+  color: var(--muted);
+  max-width: 78ch;
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--cyan);
+  text-decoration: none;
+  border-bottom: 1px solid oklch(0.8 0.14 190 / 0.3);
+}
+
+a:hover {
+  color: oklch(0.88 0.12 190);
+  border-bottom-color: currentColor;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--mono);
+}
+
+/* ---------- tables: nine of sixteen views are one ---------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 4px;
+  font-size: 12.5px;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  text-align: left;
+  padding: 9px 12px 9px 0;
+  border-bottom: 1px solid var(--line-strong);
+  font: 400 10px/1.4 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+tbody th[scope='row'] {
+  text-align: left;
+  font-weight: 400;
+  color: var(--muted);
+  width: 190px;
+  padding: 9px 12px 9px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+tbody td {
+  padding: 9px 12px 9px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+tbody tr:hover td,
+tbody tr:hover th[scope='row'] {
+  background: var(--panel);
+}
+
+/* Numeric columns read better right-aligned; opt in per view where wanted. */
+td.num,
+th.num {
+  text-align: right;
+  padding-right: 0;
+}
+
+/* ---------- lists used as data, not prose ---------- */
+
+main ul {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+main ul > li {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+main ul > li:last-child {
+  border-bottom: none;
+}
+
+/* ---------- controls ---------- */
+
+label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 14px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+select,
+input,
+button {
+  font: 400 12.5px/1 var(--mono);
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  padding: 7px 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+input::placeholder {
+  color: var(--dim);
+}
+
+select:hover,
+input:hover,
+button:hover:not(:disabled) {
+  border-color: oklch(0.8 0.14 190 / 0.6);
+}
+
+select:focus-visible,
+input:focus-visible,
+button:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Tab-style toggles (scrape detail: text / clean / raw). */
+button[aria-pressed='true'] {
+  background: var(--cyan);
+  border-color: var(--cyan);
+  color: oklch(0.19 0.014 265);
+}
+
+/* ---------- stored content ---------- */
+
+pre {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 14px 16px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+iframe {
+  background: oklch(0.98 0.002 265);
+  border: 1px solid var(--line-strong);
+}
+
+/* ---------- shared bits ---------- */
+
+.vh {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.rail {
+  border-left: 2px solid var(--cyan);
+}
