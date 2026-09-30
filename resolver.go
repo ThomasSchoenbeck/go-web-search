@@ -52,7 +52,7 @@ func looksLikeURL(s string) bool {
 // caching the fresh result on the way out.
 func (r *resolver) Search(ctx context.Context, query string, o resolveOpts) (*SearchOutcome, error) {
 	if o.useMemory {
-		if ans, facts, ok, err := MemoryAnswer(ctx, r.store, r.llm, r.cfg.Cache, r.cfg.Memory, query); err == nil && ok {
+		if ans, facts, _, ok, err := MemoryAnswer(ctx, r.store, r.llm, r.cfg.Cache, r.cfg.Memory, query, false); err == nil && ok {
 			return &SearchOutcome{Source: "memory", Answer: ans, Facts: facts}, nil
 		}
 	}

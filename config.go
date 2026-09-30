@@ -327,7 +327,7 @@ func defaultConfig() Config {
 			SimilarityThreshold: 0.85,
 			UpsertThreshold:     0.95,
 			TopK:                8,
-			Gate3Enabled:        true,
+			Gate3Enabled:        false,
 			RememberDefault:     "short",
 		},
 		Observability: ObservabilityConfig{

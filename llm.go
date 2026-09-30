@@ -58,6 +58,11 @@ func (c *LLMClient) EmbedDim() int { return c.byKind["embed"].Dim }
 // rows so a model/dim change can be detected and migrated.
 func (c *LLMClient) EmbedModelName() string { return c.byKind["embed"].Model }
 
+// EmbedQueryPrefix reports the asymmetric query prefix applied to a query before
+// embedding, so a caller (the debug path) can show the exact text a query is
+// embedded with.
+func (c *LLMClient) EmbedQueryPrefix() string { return c.byKind["embed"].QueryPrefix }
+
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`

@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://192.168.178.64:8080/",
+    "ANTHROPIC_MODEL": "1^c262^kv_q8^mtp3^Qwen3.8-27B-UD-Q6_K_XL",
+    "ANTHROPIC_API_KEY": "nokey"
+  }
+}

@@ -87,19 +87,16 @@ func (s *Store) StoreFact(ctx context.Context, cfg TierConfig, mem MemoryConfig,
 	return id, nil
 }
 
-// RetrieveFacts returns the facts most similar to the query vector that clear
-// the similarity threshold, nearest first.
-func (s *Store) RetrieveFacts(ctx context.Context, mem MemoryConfig, table string, queryVec []float32) ([]MemoryFact, error) {
-	hits, err := s.VectorSearch(ctx, table, ownerMemory, queryVec, mem.TopK)
+// RetrieveCandidates returns the k nearest memory facts to the query vector with
+// their cosine similarity, WITHOUT applying the similarity threshold — the debug
+// path uses it to show how far a near-miss fell short. Nearest first.
+func (s *Store) RetrieveCandidates(ctx context.Context, table string, queryVec []float32, k int) ([]MemoryFact, error) {
+	hits, err := s.VectorSearch(ctx, table, ownerMemory, queryVec, k)
 	if err != nil {
 		return nil, err
 	}
-	var out []MemoryFact
+	out := make([]MemoryFact, 0, len(hits))
 	for _, h := range hits {
-		sim := 1 - h.Distance
-		if sim < mem.SimilarityThreshold {
-			break // nearest-first, so nothing later can pass
-		}
 		f, ok, err := s.scanFact(ctx, h.ID)
 		if err != nil {
 			return nil, err
@@ -107,7 +104,7 @@ func (s *Store) RetrieveFacts(ctx context.Context, mem MemoryConfig, table strin
 		if !ok {
 			continue
 		}
-		f.Similarity = sim
+		f.Similarity = 1 - h.Distance
 		out = append(out, *f)
 	}
 	return out, nil

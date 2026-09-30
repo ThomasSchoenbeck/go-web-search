@@ -343,6 +343,7 @@ func (s *apiServer) rememberScrapes(ctx context.Context, remember, detail, focus
 
 type MemoryQueryRequest struct {
 	Question string `json:"question" jsonschema:"the question to try to answer from memory"`
+	Debug    bool   `json:"debug,omitempty" jsonschema:"return diagnostics: which gate failed, per-fact similarity (including near-misses), and the adjudicator's raw reply. A debug query is read-only and records no hits."`
 }
 
 type MemoryFactView struct {
@@ -356,6 +357,15 @@ type MemoryQueryResponse struct {
 	Found  bool             `json:"found"`
 	Answer string           `json:"answer,omitempty"`
 	Facts  []MemoryFactView `json:"facts,omitempty"`
+	// Debug is populated only when the request set debug=true.
+	Debug *MemoryDebug `json:"debug,omitempty"`
+}
+
+// ExploreRequest is the input for the memory_explore MCP tool: a raw
+// nearest-neighbour probe over the vector store (see store.Explore).
+type ExploreRequest struct {
+	Text string `json:"text" jsonschema:"the text to find the nearest stored vectors for"`
+	K    int    `json:"k,omitempty" jsonschema:"how many nearest neighbours to return (default 10, max 100)"`
 }
 
 type MemoryStoreRequest struct {
@@ -373,11 +383,11 @@ func (s *apiServer) runMemoryQuery(ctx context.Context, req MemoryQueryRequest) 
 	if strings.TrimSpace(req.Question) == "" {
 		return nil, errors.New("question is required")
 	}
-	ans, facts, ok, err := MemoryAnswer(ctx, s.h.store, s.llm, s.cfg.Cache, s.cfg.Memory, req.Question)
+	ans, facts, dbg, ok, err := MemoryAnswer(ctx, s.h.store, s.llm, s.cfg.Cache, s.cfg.Memory, req.Question, req.Debug)
 	if err != nil {
 		return nil, err
 	}
-	resp := &MemoryQueryResponse{Found: ok, Answer: ans}
+	resp := &MemoryQueryResponse{Found: ok, Answer: ans, Debug: dbg}
 	for _, f := range facts {
 		resp.Facts = append(resp.Facts, MemoryFactView{
 			Text: f.Text, SourceURL: f.SourceURL, Volatility: f.Volatility, Similarity: f.Similarity,
@@ -592,6 +602,18 @@ func (s *apiServer) mcpMemoryStore(ctx context.Context, _ *mcp.CallToolRequest, 
 		return nil, MemoryStoreResponse{}, err
 	}
 	return nil, *resp, nil
+}
+
+// mcpExplore is the MCP form of the raw nearest-neighbour probe: it gates
+// nothing and synthesises nothing, reporting what is near and how near, across
+// both memory facts and cached searches.
+func (s *apiServer) mcpExplore(ctx context.Context, _ *mcp.CallToolRequest, in ExploreRequest) (
+	*mcp.CallToolResult, ExploreResult, error) {
+	result, err := s.h.store.Explore(ctx, s.embed, in.Text, in.K)
+	if err != nil {
+		return nil, ExploreResult{}, err
+	}
+	return nil, *result, nil
 }
 
 // snippetsFor loads capped text for each successful scrape, which is what makes
@@ -891,9 +913,20 @@ func (s *apiServer) buildMCPServer() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "memory_query",
 		Description: "Ask what is already known. " +
-			"Returns found=true with a synthesized answer only when memory clears the confidence " +
-			"gates; otherwise found=false and you should web_search instead.",
+			"Returns found=true with the relevant fresh facts (answer is their joined text; each fact in facts[] " +
+			"carries a similarity) when memory holds similar, non-stale ones — synthesise the answer from the " +
+			"facts yourself. Otherwise found=false and you should web_search instead. " +
+			"Pass debug=true to also get diagnostics (which gate failed, per-fact similarity including near-misses, " +
+			"the adjudicator's raw reply when synthesis is enabled).",
 	}, s.mcpMemoryQuery)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "memory_explore",
+		Description: "Raw nearest-neighbour search over the vector store (memory facts AND cached " +
+			"searches), each neighbour tagged owner_kind (memory|search), with a similarity score and no " +
+			"confidence gating. Use it when memory_query returns found=false to check whether anything is " +
+			"actually stored near the query and how close.",
+	}, s.mcpExplore)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "memory_store",

@@ -173,7 +173,7 @@ cleanup_interval = "1h"
 similarity_threshold = 0.85
 upsert_threshold = 0.95
 top_k = 8
-gate3_enabled = true
+gate3_enabled = false
 remember_default = "short"
 
 # Non-secret settings served to the observability SPA by GET /api/ui-config.
