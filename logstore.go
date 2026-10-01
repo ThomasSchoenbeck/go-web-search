@@ -45,7 +45,15 @@ const (
 )
 
 func openLogStore(driver, path string) (*LogStore, error) {
-	db, err := sql.Open(driver, path)
+	// Enable auto_vacuum and experimental VACUUM (same as main store) so the
+	// log file doesn't grow without bound when old rows are deleted.
+	dsn := path
+	if strings.Contains(dsn, "?") {
+		dsn += "&experimental=vacuum"
+	} else {
+		dsn += "?experimental=vacuum"
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening log db %s: %w", path, err)
 	}
@@ -54,6 +62,9 @@ func openLogStore(driver, path string) (*LogStore, error) {
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connecting to log db %s: %w", path, err)
+	}
+	if _, err := db.Exec("PRAGMA auto_vacuum = FULL"); err != nil {
+		_ = err // best-effort — only takes on a fresh DB
 	}
 	if _, err := db.Exec(logSchema); err != nil {
 		db.Close()
@@ -253,4 +264,26 @@ func levelOf(message string) string {
 	default:
 		return "info"
 	}
+}
+
+// TrimOldLogs deletes log rows older than maxAge, keeping the newest keepLast
+// rows regardless of age. Nulling or deleting frees pages for reuse; a later
+// VACUUM (or auto_vacuum) actually shrinks the file.
+func (l *LogStore) TrimOldLogs(ctx context.Context, maxAge time.Duration, keepLast int) error {
+	if keepLast < 0 {
+		keepLast = 0
+	}
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	_, err := l.db.ExecContext(ctx,
+		`DELETE FROM logs
+		   WHERE created_at < ?
+		     AND id NOT IN (SELECT id FROM logs ORDER BY created_at DESC LIMIT ?)`,
+		cutoff, keepLast)
+	return err
+}
+
+// Vacuum rewrites the database file to return freed pages to the OS.
+func (l *LogStore) Vacuum(ctx context.Context) error {
+	_, err := l.db.ExecContext(ctx, "VACUUM")
+	return err
 }

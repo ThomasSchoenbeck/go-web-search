@@ -30,7 +30,15 @@ type Store struct {
 }
 
 func openStore(driver, path string, maxConns int, autoVacuum string) (*Store, error) {
-	db, err := sql.Open(driver, path)
+	// Turso requires VACUUM to be enabled as an experimental feature in the DSN.
+	// Without this, "VACUUM" is a parse error.
+	dsn := path
+	if strings.Contains(dsn, "?") {
+		dsn += "&experimental=vacuum"
+	} else {
+		dsn += "?experimental=vacuum"
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s with driver %q: %w", path, driver, err)
 	}

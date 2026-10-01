@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	cdpdom "github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
-	"github.com/chromedp/chromedp/kb"
 )
 
 type searchResult struct {
@@ -20,9 +22,9 @@ type searchResult struct {
 }
 
 // searchByBox loads the engine's homepage, puts the term into its search field
-// the way a paste would, and presses Enter. The engine then builds its own
-// result URL, which carries whatever session and tracking parameters it expects
-// to see - none of which we could have guessed.
+// the way a paste would, and submits the form the way Enter would. The engine
+// then builds its own result URL, which carries whatever session and tracking
+// parameters it expects to see - none of which we could have guessed.
 func (s *session) searchByBox(parent context.Context, e engineDef, term string, timeout time.Duration) (*searchResult, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -44,29 +46,70 @@ func (s *session) searchByBox(parent context.Context, e engineDef, term string, 
 	}
 	s.log.Printf("     typing into %s", selector)
 
-	if err := chromedp.Run(ctx,
-		chromedp.MouseClickNode(node),
-		pause(200*time.Millisecond, 600*time.Millisecond),
-		// Type character by character so the engine's box fires the
-		// keydown/keypress/input events its JavaScript listens for. A single
-		// Input.insertText (paste-style) leaves that state un-updated on modern
-		// JS-controlled boxes, so the later Enter submits nothing. This is what a
-		// human does by hand in browse mode, where Enter works.
-		chromedp.KeyEvent(term),
-		// Let the suggestion dropdown settle before Enter, otherwise it can
-		// swallow the key and submit a suggestion instead of the term.
-		pause(500*time.Millisecond, 1200*time.Millisecond),
-	); err != nil {
+	typeInto := func() error {
+		return chromedp.Run(ctx,
+			chromedp.MouseClickNode(node),
+			pause(200*time.Millisecond, 600*time.Millisecond),
+			// Paste the term, the way a user's Ctrl+V would: focus the box via
+			// the DOM (a mouse click can be intercepted by whatever sits over
+			// the box) and insert the text with one Input.insertText call.
+			// That bypasses the key-event pipeline entirely - on the broken
+			// setups seen so far the individual key events never reached the
+			// page at all, while the rest of CDP (navigation, DOM) worked.
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				if err := cdpdom.Focus().WithNodeID(node.NodeID).Do(ctx); err != nil {
+					return err
+				}
+				return input.InsertText(term).Do(ctx)
+			}),
+			// Let the page's input handlers settle before the form is
+			// submitted, so the box holds the term and not a half-processed
+			// suggestion.
+			pause(500*time.Millisecond, 1200*time.Millisecond),
+		)
+	}
+	if err := typeInto(); err != nil {
 		return nil, fmt.Errorf("entering search term: %w", err)
 	}
 
-	// Enter triggers a navigation. Waiting for that navigation to finish before
-	// polling is the whole point: polling immediately binds to the homepage's
-	// JavaScript execution context, which is destroyed the moment the results
-	// page loads, producing "Cannot find context with specified id".
-	status, err := s.awaitNavigation(ctx, chromedp.KeyEvent(kb.Enter))
+	// Read the box back before pressing Enter. An empty box means the click
+	// missed the field (an overlay, the page still hydrating) and Enter would
+	// do nothing - the "no navigation" and "no results" warnings that follow
+	// are that wasted 40 s, so retry once and then fail fast.
+	var typed string
+	if err := chromedp.Run(ctx, chromedp.Value(selector, &typed)); err != nil {
+		s.log.Printf("     WARNING: could not read the search box back (%v), proceeding", err)
+	} else if strings.TrimSpace(typed) == "" {
+		s.log.Printf("     search box is empty after typing, retrying once")
+		if err := typeInto(); err != nil {
+			return nil, fmt.Errorf("entering search term: %w", err)
+		}
+		if err := chromedp.Run(ctx, chromedp.Value(selector, &typed)); err == nil && strings.TrimSpace(typed) == "" {
+			return nil, fmt.Errorf("search box on %s did not accept the term", e.home)
+		}
+	}
+
+	// Submit the form the way Enter would, without a key event. requestSubmit
+	// fires the same submit event the browser fires when Enter is pressed in
+	// the box - the page's own handler runs and the engine builds its own
+	// result URL - while needing nothing but a JS context, which works here:
+	// the box read-back above used one. Key events are exactly what the broken
+	// setups drop, which is why the term gets in as a paste (see typeInto).
+	//
+	// The submit triggers a navigation. Waiting for that navigation to finish
+	// before polling is the whole point: polling immediately binds to the
+	// homepage's JavaScript execution context, which is destroyed the moment
+	// the results page loads, producing "Cannot find context with specified
+	// id".
+	submitJS := fmt.Sprintf(`document.querySelector(%s).form.requestSubmit()`, strconv.Quote(selector))
+	status, err := s.awaitNavigation(ctx, chromedp.Evaluate(submitJS, nil))
 	if err != nil {
-		s.log.Printf("     WARNING: no navigation seen after Enter (%v), falling back to a plain settle", err)
+		// Log where the page actually is: still home means the submit never
+		// navigated; any other URL (consent, challenge, interstitial) means a
+		// different page was served and the selectors need to know about it.
+		landed := "(unknown)"
+		_ = chromedp.Run(ctx, chromedp.Location(&landed))
+		s.log.Printf("     WARNING: no navigation seen after submit (%v); page is at %s, box holds %q - falling back to a plain settle", err, landed, typed)
 		if err := chromedp.Run(ctx, chromedp.WaitReady("body", chromedp.ByQuery)); err != nil {
 			return nil, fmt.Errorf("submitting search box: %w", err)
 		}
@@ -129,17 +172,40 @@ func (s *session) collect(ctx context.Context, e engineDef) (*searchResult, erro
 	return res, nil
 }
 
+// findSearchBox returns the first node matching one of the engine's
+// search-box selectors, retrying until a node appears or the deadline passes.
+// A single query can land while the page is still hydrating, or between
+// documents during a redirect, when the DOM query matches nothing or its
+// execution context is already dead - a one-shot attempt then reports no
+// search box even though the box is about to render. Each pass re-attaches to
+// the current document, so a slow page or a mid-load navigation recovers.
+// If the box never appears, the error reports where the page actually landed:
+// that is what distinguishes a variant or challenge page from a race.
 func findSearchBox(ctx context.Context, e engineDef) (*cdp.Node, string, error) {
-	for _, sel := range e.searchBox {
-		var nodes []*cdp.Node
-		if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.ByQueryAll, chromedp.AtLeast(0))); err != nil {
-			continue
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, sel := range e.searchBox {
+			var nodes []*cdp.Node
+			if err := chromedp.Run(ctx, chromedp.Nodes(sel, &nodes, chromedp.ByQueryAll, chromedp.AtLeast(0))); err != nil {
+				continue
+			}
+			if len(nodes) > 0 {
+				return nodes[0], sel, nil
+			}
 		}
-		if len(nodes) > 0 {
-			return nodes[0], sel, nil
+		if time.Now().After(deadline) {
+			landed := ""
+			if err := chromedp.Run(ctx, chromedp.Location(&landed)); err == nil && landed != e.home {
+				return nil, "", fmt.Errorf("no search box found: page landed on %s instead of %s (tried %s)", landed, e.home, strings.Join(e.searchBox, ", "))
+			}
+			return nil, "", fmt.Errorf("no search box found on %s (tried %s)", e.home, strings.Join(e.searchBox, ", "))
+		}
+		select {
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		case <-time.After(300 * time.Millisecond):
 		}
 	}
-	return nil, "", fmt.Errorf("no search box found on %s (tried %s)", e.home, strings.Join(e.searchBox, ", "))
 }
 
 // waitForResults polls until one of the result containers exists.

@@ -56,7 +56,7 @@ func TestSearchURLOnlyAddsCountWhenAsked(t *testing.T) {
 		t.Errorf("count 20: got %q, want %q", got, want)
 	}
 	// DuckDuckGo has no count parameter, so a count must not invent one.
-	if got, want := ddg.searchURL("go test", 20), "https://duckduckgo.com/?q=go+test"; got != want {
+	if got, want := ddg.searchURL("go test", 20), "https://start.duckduckgo.com/?q=go+test"; got != want {
 		t.Errorf("ddg: got %q, want %q", got, want)
 	}
 }

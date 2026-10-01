@@ -1044,7 +1044,7 @@ func serveMode(cfg Config, art *artifacts, h *harvester, logs *LogStore, stop co
 	defer jobCancel()
 	llm := newLLMClient(cfg.LLM, cfg.LLM.Timeout.Duration, art.Log)
 	runner := newJobRunner(h.store, art.Log, cfg.Database.MaxOpenConns, time.Second, cfg.Jobs.StaleAfter.Duration)
-	registerJobs(runner, cfg, h, llm)
+	registerJobs(runner, cfg, h, llm, logs)
 
 	// Startup maintenance, before any worker holds a connection: trim processed
 	// blobs, then VACUUM to hand the freed space back (VACUUM needs exclusive
@@ -1054,6 +1054,12 @@ func serveMode(cfg Config, art *artifacts, h *harvester, logs *LogStore, stop co
 			art.Log.Printf("WARNING: startup trim failed: %v", err)
 		}
 	}
+	// Trim old log rows and vacuum the log database.
+	if cfg.Retention.LogMaxAge.Duration > 0 {
+		if err := logs.TrimOldLogs(jobCtx, cfg.Retention.LogMaxAge.Duration, cfg.Retention.LogKeepLast); err != nil {
+			art.Log.Printf("WARNING: startup log trim failed: %v", err)
+		}
+	}
 	if cfg.Retention.VacuumOnStartup {
 		art.Log.Printf("vacuuming database on startup...")
 		vstart := time.Now()
@@ -1061,6 +1067,13 @@ func serveMode(cfg Config, art *artifacts, h *harvester, logs *LogStore, stop co
 			art.Log.Printf("WARNING: startup vacuum failed: %v", err)
 		} else {
 			art.Log.Printf("vacuum done in %s", time.Since(vstart).Round(time.Millisecond))
+		}
+		art.Log.Printf("vacuuming log database on startup...")
+		lvstart := time.Now()
+		if err := logs.Vacuum(jobCtx); err != nil {
+			art.Log.Printf("WARNING: startup log vacuum failed: %v", err)
+		} else {
+			art.Log.Printf("log vacuum done in %s", time.Since(lvstart).Round(time.Millisecond))
 		}
 	}
 	if cfg.Retention.VacuumAt != "" {

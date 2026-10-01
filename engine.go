@@ -53,8 +53,8 @@ func allEngines() []engineDef {
 				return "https://www.google.com/search?q=" + url.QueryEscape(term)
 			},
 			resultsParam: "num",
-			searchBox:    []string{`textarea[name="q"]`, `input[name="q"]`, "#APjFqb"},
-			resultRoots:  []string{"#rso", "#search", "#center_col"},
+			searchBox:    []string{`textarea[name="q"]`},
+			resultRoots:  []string{"rcnt", "#rso", "#search", "#center_col"},
 			consentSelectors: []string{
 				"button#L2AGLb",
 				"button#W0wltc",
@@ -71,7 +71,7 @@ func allEngines() []engineDef {
 				return "https://www.bing.com/search?q=" + url.QueryEscape(term)
 			},
 			resultsParam: "count",
-			searchBox:    []string{"#sb_form_q", `textarea[name="q"]`, `input[name="q"]`},
+			searchBox:    []string{"#sb_form_q", `textarea[name="q"]`},
 			resultRoots:  []string{"#b_results", "main"},
 			consentSelectors: []string{
 				"#bnp_btn_accept",
@@ -82,15 +82,17 @@ func allEngines() []engineDef {
 		},
 		{
 			name: "duckduckgo",
-			home: "https://duckduckgo.com/",
+			home: "https://start.duckduckgo.com/",
 			searchPath: func(term string) string {
-				return "https://duckduckgo.com/?q=" + url.QueryEscape(term)
+				return "https://start.duckduckgo.com/?q=" + url.QueryEscape(term)
 			},
 			resultsParam: "",
-			searchBox:    []string{"#searchbox_input", `input[name="q"]`},
-			resultRoots:  []string{`[data-testid="mainline"]`, "ol.react-results--main", "#links"},
-			skipLabels:   append([]string{"duckduckgo", "duck"}, sharedSkipLabels...),
-			skipHosts:    []string{"spreadprivacy.com", "apps.apple.com"},
+			// The box is a textarea since the AI-search redesign; the input
+			// entry stays for the old variant.
+			searchBox:   []string{`textarea[name="q"]`, `input[name="q"]`},
+			resultRoots: []string{`[data-testid="mainline"]`, "ol.react-results--main", "#links"},
+			skipLabels:  append([]string{"duckduckgo", "duck"}, sharedSkipLabels...),
+			skipHosts:   []string{"spreadprivacy.com", "apps.apple.com"},
 		},
 	}
 }

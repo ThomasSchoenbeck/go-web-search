@@ -97,13 +97,17 @@ timeout = "1200s"
 # How many embedding requests run at once during a bulk re-embed. Match this to
 # your embed server's parallel slot count (you ran qwen3-embed-8B with 4).
 embed_concurrency = 4
+# How many chat requests run at once: distill jobs, gate-3 adjudication and the
+# preview share the budget. Match this to your chat model's parallel slot count
+# (the "3^" prefix in the model id); 0 leaves it uncapped.
+chat_concurrency = 1
 
 [[llm.model]]
 name = "chat"
 kind = "chat"
 endpoint = "http://192.168.178.64:8080"
-# model = "3^c262^kv_q8^Qwen3.6-27B-UD-Q5_K_XL"
-model = "3^c262^kv_q8^Qwen3.6-35B-A3B-UD-Q5_K_XL"
+# model = "2^c262^kv_q8^Qwen3.8-27B-UD-Q5_K_M"
+model = "2^c262^kv_q8^Qwen3.8-27B-UD-Q5_K_M"
 api_key = "no-key"
 extra_body = { reasoning_budget = 512 }
 # OpenAI route prefix. Omit for the standard "/v1". If your multimodel
@@ -155,6 +159,10 @@ stale_after = "30m"
 trim_raw = true
 raw_max_age = "48h"
 raw_keep_last = 10
+# Log retention — delete old log rows to keep the log DB from growing forever.
+# Zero log_max_age disables trimming (the legacy default).
+log_max_age = "168h"    # 1 week
+log_keep_last = 500     # always keep the newest 500 lines
 vacuum_on_startup = true
 vacuum_at = ""        # optional daily "HH:MM" (local) to also VACUUM mid-run; empty = off
 

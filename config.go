@@ -70,6 +70,12 @@ type RetentionConfig struct {
 	TrimRaw     bool     `toml:"trim_raw"`
 	RawMaxAge   Duration `toml:"raw_max_age"`
 	RawKeepLast int      `toml:"raw_keep_last"`
+	// LogMaxAge is the maximum age for log rows. Logs older than this are
+	// deleted on each cleanup pass, except the newest LogKeepLast. Zero
+	// disables log trimming (the legacy default — logs accumulate forever).
+	LogMaxAge Duration `toml:"log_max_age"`
+	// LogKeepLast is the minimum number of newest log rows to always keep.
+	LogKeepLast int `toml:"log_keep_last"`
 	// VacuumOnStartup runs VACUUM once at boot, before workers start.
 	VacuumOnStartup bool `toml:"vacuum_on_startup"`
 	// VacuumAt is an optional daily "HH:MM" (local) to also VACUUM mid-run;
@@ -184,6 +190,10 @@ type LLMConfig struct {
 	// bulk re-embed. The embedding server accepts parallel requests; this lets
 	// the app use them. Values <=1 embed sequentially.
 	EmbedConcurrency int `toml:"embed_concurrency"`
+	// ChatConcurrency caps how many chat requests run at once. Distill jobs,
+	// gate-3 adjudication and the preview all share the budget. Match this to
+	// your chat server's parallel slot count; 0 leaves it uncapped.
+	ChatConcurrency int `toml:"chat_concurrency"`
 }
 
 type LLMModel struct {
@@ -315,6 +325,8 @@ func defaultConfig() Config {
 			TrimRaw:         true,
 			RawMaxAge:       Duration{48 * time.Hour},
 			RawKeepLast:     10,
+			LogMaxAge:       Duration{168 * time.Hour}, // 1 week
+			LogKeepLast:     500,
 			VacuumOnStartup: true,
 		},
 		Cache: TierConfig{

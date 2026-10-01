@@ -10,13 +10,18 @@ const jobTypeCleanup = "cleanup"
 // cleanupHandler deletes expired rows from every store and, when enabled, trims
 // large already-processed blobs. It runs on the recurring schedule registered in
 // registerJobs.
-func cleanupHandler(store *Store, ret RetentionConfig) JobHandler {
+func cleanupHandler(store *Store, logs *LogStore, ret RetentionConfig) JobHandler {
 	return func(ctx context.Context, _ string) error {
 		if err := store.CleanupExpired(ctx); err != nil {
 			return err
 		}
 		if ret.TrimRaw {
-			return store.TrimRawContent(ctx, ret.RawMaxAge.Duration, ret.RawKeepLast)
+			if err := store.TrimRawContent(ctx, ret.RawMaxAge.Duration, ret.RawKeepLast); err != nil {
+				return err
+			}
+		}
+		if ret.LogMaxAge.Duration > 0 {
+			_ = logs.TrimOldLogs(ctx, ret.LogMaxAge.Duration, ret.LogKeepLast)
 		}
 		return nil
 	}

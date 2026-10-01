@@ -19,6 +19,9 @@ type LLMClient struct {
 	http   *http.Client
 	byKind map[string]LLMModel
 	log    *log.Logger
+	// chatSem, when non-nil, bounds concurrent in-flight chat requests to the
+	// configured slot count; nil means uncapped.
+	chatSem chan struct{}
 }
 
 func newLLMClient(cfg LLMConfig, timeout time.Duration, logger *log.Logger) *LLMClient {
@@ -32,7 +35,11 @@ func newLLMClient(cfg LLMConfig, timeout time.Duration, logger *log.Logger) *LLM
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	return &LLMClient{http: &http.Client{Timeout: timeout}, byKind: byKind, log: logger}
+	var chatSem chan struct{}
+	if cfg.ChatConcurrency > 0 {
+		chatSem = make(chan struct{}, cfg.ChatConcurrency)
+	}
+	return &LLMClient{http: &http.Client{Timeout: timeout}, byKind: byKind, log: logger, chatSem: chatSem}
 }
 
 // logf logs one line per LLM call so the otherwise-silent distill/embed traffic
@@ -105,6 +112,12 @@ func (c *LLMClient) Chat(ctx context.Context, system, user string) (string, erro
 // MaxTokens, ExtraBody), lets a caller override them per call, and returns token
 // usage alongside the text.
 func (c *LLMClient) chat(ctx context.Context, system, user string, p chatParams) (string, ChatUsage, error) {
+	// Take a slot before anything else so every caller — jobs, gate-3, preview —
+	// shares the server's parallel budget.
+	if c.chatSem != nil {
+		c.chatSem <- struct{}{}
+		defer func() { <-c.chatSem }()
+	}
 	m, err := c.model("chat")
 	if err != nil {
 		return "", ChatUsage{}, err
